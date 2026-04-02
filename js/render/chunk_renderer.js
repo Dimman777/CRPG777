@@ -207,9 +207,23 @@ export class ChunkRenderer {
 
   elevationAt(tx, ty) {
     if (!this._tileElev) return 0;
-    const itx = Math.max(0, Math.min(_S - 1, Math.floor(tx)));
-    const ity = Math.max(0, Math.min(_S - 1, Math.floor(ty)));
-    return this._tileElev[ity * _S + itx];
+    const S  = _S;
+    // Clamp to chunk interior so edge characters don't read out-of-bounds.
+    const x  = Math.max(0, Math.min(S - 0.0001, tx));
+    const z  = Math.max(0, Math.min(S - 0.0001, ty));
+    const x0 = Math.floor(x),       x1 = Math.min(S - 1, x0 + 1);
+    const z0 = Math.floor(z),       z1 = Math.min(S - 1, z0 + 1);
+    const fx = x - x0,              fz = z - z0;
+    const h00 = this._tileElev[z0 * S + x0];
+    const h10 = this._tileElev[z0 * S + x1];
+    const h01 = this._tileElev[z1 * S + x0];
+    const h11 = this._tileElev[z1 * S + x1];
+    // Bilinear interpolation — gives a continuous height field matching
+    // the terrain slope, so characters glide instead of snapping at tile edges.
+    return h00 * (1 - fx) * (1 - fz)
+         + h10 *      fx  * (1 - fz)
+         + h01 * (1 - fx) *      fz
+         + h11 *      fx  *      fz;
   }
 
   dispose() {
