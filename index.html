@@ -1,0 +1,695 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CRPG</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #111;
+      color: #eee;
+      font-family: monospace;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #game-viewport {
+      position: absolute;
+      inset: 0;
+    }
+
+    #hud {
+      position: absolute;
+      top: 0; left: 0; right: 0;
+      pointer-events: none;
+    }
+
+    #dialogue-panel {
+      position: absolute;
+      bottom: 0; left: 0; right: 0;
+      display: none;
+    }
+
+    #right-panels {
+      position: absolute;
+      top: 0; right: 0;
+      display: flex;
+      flex-direction: row;
+      align-items: flex-start;
+      pointer-events: none;
+    }
+
+    #macro-panel   { display: none; }
+    #location-panel { display: none; }
+    #tile-panel    { display: none; }
+
+    #debug-panel {
+      position: absolute;
+      bottom: 0; left: 0;
+      background: rgba(0,0,0,0.6);
+      padding: 8px;
+      font-size: 11px;
+      max-width: 400px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    /* ── World Map overlay ─────────────────────────────────────────────────── */
+    #map-preview-overlay {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.85);
+      z-index: 100;
+      overflow: auto;
+      padding: 12px;
+    }
+    #map-preview-overlay.visible { display: block; }
+    #map-preview-toolbar {
+      margin-bottom: 8px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-family: monospace;
+      font-size: 12px;
+      color: #ccc;
+    }
+    #map-preview-toolbar button {
+      padding: 4px 10px;
+      font-family: monospace;
+      font-size: 12px;
+      background: #222;
+      color: #ccc;
+      border: 1px solid #555;
+      border-radius: 2px;
+      cursor: pointer;
+    }
+    #map-preview-toolbar button:hover { background: #333; }
+    #map-preview-canvas { display: block; image-rendering: pixelated; }
+
+    #map-preview-btn {
+      display: none; /* hidden until game starts */
+      position: absolute;
+      top: 8px;
+      left: calc(50% - 95px);
+      padding: 5px 12px;
+      font-family: monospace;
+      font-size: 11px;
+      background: rgba(30,30,50,0.85);
+      color: #aac;
+      border: 1px solid #446;
+      border-radius: 3px;
+      cursor: pointer;
+      z-index: 50;
+    }
+
+    #edit-chunk-btn {
+      display: none; /* hidden until game starts */
+      position: absolute;
+      top: 8px;
+      left: calc(50% + 5px);
+      padding: 5px 12px;
+      font-family: monospace;
+      font-size: 11px;
+      background: rgba(30,30,50,0.85);
+      color: #aac;
+      border: 1px solid #446;
+      border-radius: 3px;
+      cursor: pointer;
+      z-index: 50;
+    }
+
+    /* ── Start Screen ──────────────────────────────────────────────────────── */
+    #start-screen {
+      position: fixed;
+      inset: 0;
+      z-index: 200;
+      background: #0d0d14;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 0;
+    }
+
+    .start-title {
+      font-size: 52px;
+      letter-spacing: 0.18em;
+      color: #c8b890;
+      text-shadow: 0 0 30px rgba(200,184,144,0.3);
+      margin-bottom: 8px;
+    }
+
+    .start-subtitle {
+      font-size: 13px;
+      letter-spacing: 0.25em;
+      color: #556;
+      margin-bottom: 48px;
+    }
+
+    .start-choices {
+      display: flex;
+      gap: 24px;
+    }
+
+    .start-btn {
+      padding: 14px 32px;
+      font-family: monospace;
+      font-size: 14px;
+      letter-spacing: 0.08em;
+      background: transparent;
+      color: #aab8cc;
+      border: 1px solid #334;
+      border-radius: 3px;
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+      min-width: 180px;
+    }
+    .start-btn:hover {
+      background: rgba(80,100,140,0.18);
+      border-color: #556;
+      color: #dde8f8;
+    }
+
+    /* Preset panel sits inside start-screen */
+    #preset-panel {
+      display: none;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      width: 480px;
+    }
+
+    .preset-panel-title {
+      font-size: 16px;
+      letter-spacing: 0.12em;
+      color: #aab;
+      margin-bottom: 4px;
+    }
+
+    #preset-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      width: 100%;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+
+    .preset-world-btn {
+      padding: 12px 16px;
+      font-family: monospace;
+      font-size: 12px;
+      text-align: left;
+      background: rgba(255,255,255,0.03);
+      color: #ccc;
+      border: 1px solid #334;
+      border-radius: 3px;
+      cursor: pointer;
+      line-height: 1.6;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    .preset-world-btn:hover {
+      background: rgba(80,100,140,0.18);
+      border-color: #556;
+    }
+    .preset-world-btn strong { color: #dde; font-size: 13px; }
+    .preset-world-btn small  { color: #778; }
+
+    /* Load custom bitmaps option */
+    #bitmap-load-section {
+      width: 100%;
+      border-top: 1px solid #222;
+      padding-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .bitmap-load-label {
+      font-size: 11px;
+      color: #556;
+      letter-spacing: 0.1em;
+      margin-bottom: 2px;
+    }
+    .bitmap-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 11px;
+      color: #778;
+    }
+    .bitmap-row label { width: 80px; flex-shrink: 0; }
+    .bitmap-row input[type="file"] {
+      flex: 1;
+      font-family: monospace;
+      font-size: 11px;
+      color: #aaa;
+      background: #111;
+      border: 1px solid #333;
+      border-radius: 2px;
+      padding: 3px 4px;
+    }
+    #bitmap-load-btn {
+      padding: 8px 16px;
+      font-family: monospace;
+      font-size: 12px;
+      background: transparent;
+      color: #88a8cc;
+      border: 1px solid #334;
+      border-radius: 3px;
+      cursor: pointer;
+      align-self: flex-end;
+    }
+    #bitmap-load-btn:hover { background: rgba(80,100,140,0.18); border-color: #556; }
+
+    .preset-back-btn {
+      font-family: monospace;
+      font-size: 11px;
+      background: transparent;
+      color: #556;
+      border: none;
+      cursor: pointer;
+      padding: 4px 0;
+      letter-spacing: 0.05em;
+    }
+    .preset-back-btn:hover { color: #aaa; }
+  </style>
+</head>
+<body>
+  <div id="game-viewport"></div>
+  <div id="hud"></div>
+  <div id="dialogue-panel"></div>
+  <div id="right-panels">
+    <div style="display:flex;flex-direction:column">
+      <div id="location-panel"></div>
+      <div id="tile-panel"></div>
+      <div id="formation-panel" style="display:none;pointer-events:auto"></div>
+    </div>
+    <div id="macro-panel"></div>
+  </div>
+  <div id="debug-panel"></div>
+
+  <button id="map-preview-btn">🗺 World Map</button>
+  <button id="edit-chunk-btn">✎ Edit Chunk</button>
+
+  <div id="map-preview-overlay">
+    <div id="map-preview-toolbar">
+      <button id="map-gen-btn">Generate</button>
+      <label>Seed: <input id="map-seed-input" type="number" value="42"
+        style="width:80px; background:#222; color:#ccc; border:1px solid #555;
+               border-radius:2px; padding:3px 5px; font-family:monospace; font-size:12px;"></label>
+      <label>Scale:
+        <select id="map-scale-select"
+          style="background:#222; color:#ccc; border:1px solid #555; border-radius:2px;
+                 padding:3px; font-family:monospace; font-size:12px;">
+          <option value="1" selected>1×</option>
+          <option value="2">2×</option>
+          <option value="3">3×</option>
+          <option value="4">4×</option>
+          <option value="8">8×</option>
+        </select>
+      </label>
+      <label id="faults-label">Faults:
+        <select id="map-faults-select"
+          style="background:#222; color:#ccc; border:1px solid #555; border-radius:2px;
+                 padding:3px; font-family:monospace; font-size:12px;">
+          <option value="0" selected>0</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
+      </label>
+      <span id="map-stats" style="margin-left:8px; color:#888;"></span>
+      <button id="map-close-btn" style="margin-left:auto;">✕ Close</button>
+    </div>
+    <canvas id="map-preview-canvas"></canvas>
+  </div>
+
+  <!-- ── Start Screen ─────────────────────────────────────────────────────── -->
+  <div id="start-screen">
+    <h1 class="start-title">CRPG</h1>
+    <div class="start-subtitle">choose your world</div>
+
+    <div class="start-choices" id="start-choices">
+      <button class="start-btn" id="btn-random">Random World</button>
+      <button class="start-btn" id="btn-preset">Pre-set World</button>
+    </div>
+
+    <div id="preset-panel">
+      <div class="preset-panel-title">Choose a World</div>
+      <div id="preset-list"><span style="color:#445">Loading…</span></div>
+
+      <div id="bitmap-load-section">
+        <div class="bitmap-load-label">— or load bitmaps directly —</div>
+        <div class="bitmap-row">
+          <label>Altitude</label>
+          <input type="file" id="bmp-alt"     accept="image/*">
+        </div>
+        <div class="bitmap-row">
+          <label>Climate</label>
+          <input type="file" id="bmp-climate" accept="image/*">
+        </div>
+        <div class="bitmap-row">
+          <label>Cover</label>
+          <input type="file" id="bmp-cover"   accept="image/*">
+        </div>
+        <button id="bitmap-load-btn">Load Bitmaps</button>
+      </div>
+
+      <button class="preset-back-btn" id="btn-preset-back">← Back</button>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js"
+      }
+    }
+  </script>
+  <script type="module" src="js/main.js"></script>
+  <script type="module">
+    import { WorldGen }           from './js/macro/world_gen.js';
+    import { WorldPopulator }     from './js/macro/world_populator.js';
+    import { MacroMapView }       from './js/ui/macro_map_view.js';
+    import { ChunkGenerator }     from './js/micro/chunk_gen.js';
+    import { BitmapWorldLoader }  from './js/macro/bitmap_world_loader.js';
+    import { ChunkOverrides }     from './js/core/chunk_overrides.js';
+    import { ChunkEditor }        from './js/ui/chunk_editor.js';
+
+    const overlay    = document.getElementById('map-preview-overlay');
+    const canvas     = document.getElementById('map-preview-canvas');
+    const statsEl    = document.getElementById('map-stats');
+    const startScreen = document.getElementById('start-screen');
+    const startChoices = document.getElementById('start-choices');
+    const presetPanel  = document.getElementById('preset-panel');
+    const mapPreviewBtn = document.getElementById('map-preview-btn');
+    const faultsLabel  = document.getElementById('faults-label');
+
+    // Shared override store — created once and passed into the game engine.
+    const overrides = new ChunkOverrides();
+
+    const view      = new MacroMapView(canvas);
+    view.setChunkOverrides(overrides);
+    let   lastMap   = null;
+    let   lastWorld = null;
+    let   chunkGen  = null;
+    let   flashTimer = null;
+    let   preGame   = true;  // true until game.start() is called
+
+    // Chunk editor — single instance, re-used for every cell.
+    const editor = new ChunkEditor();
+    editor.onSave = (mx, my) => {
+      // Refresh preview so the ✎ indicator updates.
+      if (lastMap) view.draw(lastMap, lastWorld);
+      // If the game is running, hot-reload the live chunk.
+      if (!preGame && window._game?.microWorld) {
+        window._game.microWorld.reloadChunk(mx, my);
+      }
+    };
+
+    view.onEditChunk = (mx, my, grid) => {
+      editor.open(mx, my, grid, overrides);
+    };
+
+    // ── Map generation ───────────────────────────────────────────────────────
+
+    function runGen() {
+      const seed   = parseInt(document.getElementById('map-seed-input').value) || Date.now();
+      const scale  = parseInt(document.getElementById('map-scale-select').value) || 1;
+      const faults = parseInt(document.getElementById('map-faults-select').value) ?? 0;
+      const t0     = performance.now();
+
+      let map, worldData;
+      const shared = window._sharedWorld;
+      if (shared && shared.seed === seed && shared.numFaults === faults) {
+        map = shared.map;
+        worldData = shared.worldData;
+      } else {
+        const gen = new WorldGen({ numFaults: faults });
+        map = gen.generate(seed);
+        const populator = new WorldPopulator();
+        worldData = populator.populate(map, seed);
+      }
+      const ms = (performance.now() - t0).toFixed(0);
+
+      lastMap   = map;
+      lastWorld = worldData;
+      chunkGen  = new ChunkGenerator(seed);
+      view.setChunkGenerator(chunkGen);
+      view.setScale(scale);
+      view.draw(map, worldData);
+
+      const land     = map.count(c => c.isLand());
+      const river    = map.count(c => c.hasRiver());
+      const kingdoms = worldData.kingdoms.length;
+      const ancients = worldData.ancientSites.length;
+      const pois     = worldData.pois.length;
+      statsEl.textContent =
+        `${map.width}×${map.height}  land:${land}  rivers:${river}  ` +
+        `kingdoms:${kingdoms}  ancient:${ancients}  poi:${pois}  ${ms}ms`;
+    }
+
+    // ── Flash (player marker blink) ──────────────────────────────────────────
+
+    function startFlash() {
+      if (flashTimer) return;
+      flashTimer = setInterval(() => {
+        if (lastMap) view.draw(lastMap, lastWorld);
+      }, 350);
+    }
+    function stopFlash() {
+      clearInterval(flashTimer);
+      flashTimer = null;
+    }
+
+    // ── Enter game ───────────────────────────────────────────────────────────
+    // Called once a world and start cell are chosen.  Starts the 3D engine.
+
+    const editChunkBtn = document.getElementById('edit-chunk-btn');
+
+    function enterGame(opts) {
+      preGame = false;
+      startScreen.style.display = 'none';
+      overlay.classList.remove('visible');
+      stopFlash();
+      mapPreviewBtn.style.display = 'block';
+      editChunkBtn.style.display = 'block';
+      view.goButtonLabel = 'Go Here';
+      window._game.start({ ...opts, chunkOverrides: overrides });
+    }
+
+    editChunkBtn.addEventListener('click', () => {
+      const cell = window._playerCell;
+      if (!cell || !chunkGen || !lastMap) return;
+      const { mx, my } = cell;
+      const macroCell = lastMap.get(mx, my);
+      if (!macroCell?.isLand?.()) return;
+      const grid = chunkGen.generate(lastMap, mx, my, overrides);
+      if (grid) editor.open(mx, my, grid, overrides);
+    });
+
+    // ── "Go Here" / "Start Here" callback ───────────────────────────────────
+
+    view.onGoHere = (mx, my) => {
+      if (!preGame) {
+        // In-game teleport
+        window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
+        overlay.classList.remove('visible');
+        stopFlash();
+      } else {
+        // Pre-game: start the adventure at this cell
+        const seed   = parseInt(document.getElementById('map-seed-input').value) || 42;
+        const faults = parseInt(document.getElementById('map-faults-select').value) ?? 0;
+        enterGame({
+          macroMap:  lastMap,
+          worldData: lastWorld,
+          seed,
+          numFaults: faults,
+          startMx:   mx,
+          startMy:   my,
+        });
+      }
+    };
+
+    // ── "Start Here" label before game, "Go Here" after ─────────────────────
+    view.goButtonLabel = 'Start Here';
+
+    // ── Start Screen: Random World ───────────────────────────────────────────
+
+    document.getElementById('btn-random').addEventListener('click', () => {
+      startScreen.style.display = 'none';
+      faultsLabel.style.display = '';          // show faults control for random worlds
+      overlay.classList.add('visible');
+      if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
+      startFlash();
+    });
+
+    // ── Start Screen: Pre-set World ──────────────────────────────────────────
+
+    document.getElementById('btn-preset').addEventListener('click', async () => {
+      startChoices.style.display = 'none';
+      presetPanel.style.display  = 'flex';
+      faultsLabel.style.display  = 'none';   // no fault control for bitmap worlds
+
+      const listEl = document.getElementById('preset-list');
+      try {
+        const resp = await fetch('worlds/index.json');
+        const { worlds } = await resp.json();
+
+        if (!worlds.length) {
+          listEl.innerHTML =
+            '<span style="color:#445;font-size:11px">No pre-set worlds yet.<br>' +
+            'Add entries to worlds/index.json to see them here.</span>';
+        } else {
+          listEl.innerHTML = '';
+          for (const w of worlds) {
+            const btn = document.createElement('button');
+            btn.className = 'preset-world-btn';
+            btn.innerHTML =
+              `<strong>${w.name}</strong><br>` +
+              `<small>${w.description ?? ''}</small>`;
+            btn.addEventListener('click', () => loadPresetWorld(w));
+            listEl.appendChild(btn);
+          }
+        }
+      } catch {
+        listEl.innerHTML = '<span style="color:#844;font-size:11px">Could not load worlds/index.json</span>';
+      }
+    });
+
+    document.getElementById('btn-preset-back').addEventListener('click', () => {
+      presetPanel.style.display  = 'none';
+      startChoices.style.display = 'flex';
+    });
+
+    // ── Load a preset world from its three bitmap URLs ────────────────────────
+
+    async function loadPresetWorld(meta) {
+      presetPanel.style.display = 'none';
+      startScreen.style.display = 'none';
+      overlay.classList.add('visible');
+      statsEl.textContent = 'Loading bitmaps…';
+      startFlash();
+
+      try {
+        const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
+        const loader = new BitmapWorldLoader();
+        const macroMap = await loader.loadFromUrls(meta.altitude, meta.climate, meta.cover);
+        const worldData = new WorldPopulator().populate(macroMap, seed);
+
+        lastMap   = macroMap;
+        lastWorld = worldData;
+        window._sharedWorld = { seed, numFaults: 0, map: macroMap, worldData };
+
+        chunkGen = new ChunkGenerator(seed);
+        view.setChunkGenerator(chunkGen);
+        view.setScale(parseInt(document.getElementById('map-scale-select').value) || 1);
+        view.draw(macroMap, worldData);
+        const land      = macroMap.count(c => c.isLand());
+        const kingdoms  = worldData.kingdoms.length;
+        const ancients  = worldData.ancientSites.length;
+        const pois      = worldData.pois.length;
+        statsEl.textContent =
+          `${macroMap.width}×${macroMap.height}  land:${land}  kingdoms:${kingdoms}  ancient:${ancients}  poi:${pois}  (${meta.name})  — click to Start Here`;
+      } catch (err) {
+        statsEl.textContent = `Error: ${err.message}`;
+        console.error(err);
+      }
+    }
+
+    // ── Load custom bitmap files ──────────────────────────────────────────────
+
+    document.getElementById('bitmap-load-btn').addEventListener('click', async () => {
+      const altFile  = document.getElementById('bmp-alt').files[0];
+      const climFile = document.getElementById('bmp-climate').files[0];
+      const covFile  = document.getElementById('bmp-cover').files[0];
+      if (!altFile || !climFile || !covFile) {
+        alert('Please select all three bitmap files (Altitude, Climate, Cover).');
+        return;
+      }
+
+      presetPanel.style.display = 'none';
+      startScreen.style.display = 'none';
+      overlay.classList.add('visible');
+      statsEl.textContent = 'Loading bitmaps…';
+      startFlash();
+
+      try {
+        const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
+        const loader = new BitmapWorldLoader();
+        const macroMap = await loader.loadFromFiles(altFile, climFile, covFile);
+        const worldData = new WorldPopulator().populate(macroMap, seed);
+
+        lastMap   = macroMap;
+        lastWorld = worldData;
+        window._sharedWorld = { seed, numFaults: 0, map: macroMap, worldData };
+
+        chunkGen = new ChunkGenerator(seed);
+        view.setChunkGenerator(chunkGen);
+        view.setScale(parseInt(document.getElementById('map-scale-select').value) || 1);
+        view.draw(macroMap, worldData);
+        const land      = macroMap.count(c => c.isLand());
+        const kingdoms  = worldData.kingdoms.length;
+        const ancients  = worldData.ancientSites.length;
+        const pois      = worldData.pois.length;
+        statsEl.textContent =
+          `${macroMap.width}×${macroMap.height}  land:${land}  kingdoms:${kingdoms}  ancient:${ancients}  poi:${pois}  (custom bitmaps)  — click to Start Here`;
+      } catch (err) {
+        statsEl.textContent = `Error: ${err.message}`;
+        console.error(err);
+        // Return to preset panel on failure
+        startScreen.style.display = 'flex';
+        presetPanel.style.display = 'flex';
+        overlay.classList.remove('visible');
+        stopFlash();
+      }
+    });
+
+    // ── In-game World Map button ─────────────────────────────────────────────
+
+    mapPreviewBtn.addEventListener('click', () => {
+      overlay.classList.add('visible');
+      if (window._playerCell) view.setPlayerCell(window._playerCell.mx, window._playerCell.my);
+      if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
+      startFlash();
+    });
+
+    document.getElementById('map-close-btn').addEventListener('click', () => {
+      if (preGame) {
+        // Return to start screen
+        overlay.classList.remove('visible');
+        stopFlash();
+        startScreen.style.display = 'flex';
+        startChoices.style.display = 'flex';
+        presetPanel.style.display = 'none';
+      } else {
+        overlay.classList.remove('visible');
+        stopFlash();
+      }
+    });
+
+    document.getElementById('map-gen-btn').addEventListener('click', runGen);
+    document.getElementById('map-scale-select').addEventListener('change', () => {
+      if (lastMap) {
+        view.setScale(parseInt(document.getElementById('map-scale-select').value));
+        view.draw(lastMap, lastWorld);
+      }
+    });
+
+    // ── Player marker ─────────────────────────────────────────────────────────
+
+    window.addEventListener('playerCellChanged', e => {
+      window._playerCell = e.detail;
+      view.setPlayerCell(e.detail.mx, e.detail.my);
+      if (overlay.classList.contains('visible') && lastMap) {
+        view.draw(lastMap, lastWorld);
+      }
+    });
+  </script>
+</body>
+</html>

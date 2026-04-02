@@ -1,0 +1,132 @@
+CRPG WORLD MAP PAINTING GUIDE
+==============================
+Three bitmaps are needed per world.  Any image editor works (Photoshop,
+Krita, GIMP, Paint.NET, Aseprite, etc.).  Recommended canvas size: 640x480.
+All three files must be the same dimensions.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. ALTITUDE MAP   (altitude.png)
+   Greyscale image.  Only the Red channel is read, so pure greyscale is fine.
+   Black = deepest ocean.  White = highest peak.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Pixel value   Terrain type       Notes
+  -----------   ----------------   ------------------------------------------
+  0   – 100     Ocean              Deep water.  Player cannot enter.
+  101 – 120     Shallow Shore      Beach / tidal flat.  Passable.
+  121 – 155     Flat               Low land, plains, valleys.
+  156 – 185     Hills              Rolling terrain.
+  186 – 215     Mountain           High terrain.
+  216 – 235     Steep Mountain     Near-impassable slopes.
+  236 – 255     Peak               Summit / glacier cap.  Impassable.
+
+  Auto-rule: any Shallow Shore cell that is directly adjacent (N/E/S/W) to a
+  Mountain or higher cell (pixel >= 186) is automatically upgraded to
+  Steep Shore (coastal cliffs — impassable from sea).
+
+  Tips:
+  - Paint the land/sea boundary at around pixel value 100-110 for beaches.
+  - Use gradient fills for natural-looking elevation transitions.
+  - Hard edges between ocean (< 100) and mountain (> 185) produce cliffs.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+2. CLIMATE MAP   (climate.png)
+   Colour image.  Each pixel is matched to the nearest entry in the palette
+   below using RGB distance — you do not need pixel-perfect colour values,
+   approximate is fine.  Use a hard brush / flat fill per zone.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Hex       R    G    B    Zone name           Moisture      Temperature
+  -------   ---  ---  ---  ------------------  ------------  -----------
+  #2090FF    32  144  255  River               —             —
+  #C8A050   200  160   80  Hot Desert          desert         90 / 100
+  #C0B860   192  184   96  Warm Arid Scrub     arid           70 / 100
+  #90B030   144  176   48  Savanna / Steppe    dry            65 / 100
+  #40A040    64  160   64  Temperate           temperate      55 / 100
+  #10C060    16  192   96  Tropical Rainforest wet            80 / 100
+  #809060   128  144   96  Cool Dry Upland     dry            38 / 100
+  #407060    64  112   96  Cool Temperate      temperate      38 / 100
+  #305050    48   80   80  Cold Taiga          wet            25 / 100
+  #8090A0   128  144  160  Tundra              arid           15 / 100
+  #C8D8E0   200  216  224  Polar / Ice         desert          5 / 100
+
+  River (#2090FF):
+    Paint river paths as 1-2 pixel wide lines in this colour.
+    The loader detects which cardinal neighbours are also river-coloured and
+    builds the connection bitmask automatically.  Rivers painted over ocean
+    cells are ignored.  Climate for river cells defaults to Temperate.
+
+  Coverage guide — what to use where:
+    Equatorial band (centre latitude)  →  Tropical Rainforest, Hot Desert
+    Sub-tropical                       →  Warm Arid Scrub, Savanna / Steppe
+    Mid latitudes                      →  Temperate, Cool Temperate
+    High latitudes / mountain interiors→  Cool Dry Upland, Cold Taiga
+    Near poles or high peaks           →  Tundra, Polar / Ice
+    Rain shadow (east of mountains)    →  Warm Arid Scrub, Savanna
+    Windward coasts                    →  Temperate, Cool Temperate, Wet zones
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+3. COVER MAP   (cover.png)
+   Greyscale image.  Controls vegetation density.
+   Black = bare ground.  White = dense cover.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Pixel value   Vegetation   In-game appearance
+  -----------   ----------   ------------------------------------------------
+  0   –  84     None         Bare rock, sand, scorched earth, snow fields
+  85  – 170     Light        Scattered trees, grassland, scrub, sparse forest
+  171 – 255     Dense        Thick forest, jungle, deep wetlands
+
+  Notes:
+  - Ocean and Steep Shore cells always get None regardless of the cover map.
+  - Dense cover on Desert climate = scrubland / chaparral.
+  - Dense cover on Wet climate    = rainforest / dark swamp.
+  - Dense cover on Cold Taiga     = boreal forest.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+REGISTERING A PRESET WORLD
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. Create a subfolder under worlds/:
+     worlds/
+       my_world/
+         altitude.png
+         climate.png
+         cover.png
+
+2. Add an entry to worlds/index.json:
+
+     {
+       "worlds": [
+         {
+           "name":        "My World",
+           "description": "One-line flavour text shown in the menu.",
+           "altitude":    "worlds/my_world/altitude.png",
+           "climate":     "worlds/my_world/climate.png",
+           "cover":       "worlds/my_world/cover.png"
+         }
+       ]
+     }
+
+3. Reload the game.  Your world will appear in "Pre-set World".
+   Click anywhere on the map preview then "Start Here" to begin.
+
+   Alternatively use "Load Bitmaps" to load three files directly from disk
+   without editing index.json — useful while painting / iterating.
+
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+QUICK CHECKLIST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  [ ] All three images are the same pixel dimensions
+  [ ] Altitude: ocean areas are 0-100, land areas are 121+
+  [ ] Climate:  colours match the palette table (approximate is fine)
+  [ ] Climate:  rivers are painted as thin blue (#2090FF) lines on land cells
+  [ ] Cover:    ocean/cliff areas can be black (they are overridden anyway)
+  [ ] worlds/index.json updated with correct relative paths
+  [ ] File names use no spaces (use underscores)

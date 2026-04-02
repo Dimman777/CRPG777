@@ -1,0 +1,659 @@
+# Single-Scale World Mapping System for a CRPG
+## Using Ultima VI / VII as the Model, Not the Exception
+
+## Premise
+
+This model assumes the player moves through the world at **one consistent gameplay scale** rather than switching between:
+
+- strategic world map
+- regional travel map
+- local tactical map
+
+The lesson from **Ultima VI** and **Ultima VII** is that a CRPG world can feel large, coherent, and immersive when:
+
+- towns, wilderness, roads, dungeons, and landmarks all exist in one navigable world space
+- the player understands distance physically
+- travel happens through actual terrain, not a separate abstract layer
+- map chunking exists under the hood for engine reasons, not as a player-facing mode shift
+
+This is the right reference if the goal is:
+
+- strong place-based immersion
+- geographic continuity
+- physical travel meaning
+- visible systemic change in the world itself
+
+---
+
+# Core Principle
+
+## The world is one world
+
+The player should feel that:
+
+- the city is really north of the swamp
+- the ruined fort is really on the road to the pass
+- the mine is really behind the hills near the river
+- danger and politics occupy actual space
+
+The player is not “entering the world map.”
+They are already in it.
+
+That means your design should treat the map as:
+
+- a continuous play field
+- with different densities of interaction
+- but without changing the player’s scale of embodiment
+
+---
+
+# What This Means in Practice
+
+## One player movement scale
+
+Movement should be interpreted consistently across the whole world.
+
+That does **not** mean every area must be equally dense.
+
+It means:
+
+- the same avatar scale applies in town and wilderness
+- roads, rivers, buildings, caves, ruins, and borders all fit into one continuous spatial logic
+- travel time comes from actual traversal distance, not from jumping to a strategic layer
+
+This preserves:
+
+- immersion
+- orientation
+- route knowledge
+- player memory of place
+
+---
+
+# The Real Use of Chunking
+
+## Chunking is an engine/storage solution
+
+In an Ultima-like model, chunking exists to support:
+
+- loading/unloading map data
+- memory efficiency
+- spawn management
+- AI activation ranges
+- object storage
+- state persistence
+- streaming
+
+It is **not** necessarily a design statement that the player is moving between map scales.
+
+So for your CRPG, the correct interpretation is:
+
+- **Design one continuous world**
+- **Implement it as streamed chunks/cells/sectors**
+- **Do not expose chunk boundaries to the player unless there is a strong reason**
+
+---
+
+# Recommended World Structure
+
+## One continuous overworld at player scale
+
+The world should contain in the same navigable space:
+
+- settlements
+- roads
+- rivers
+- forests
+- mountains
+- ruins
+- dungeons
+- isolated homes
+- faction outposts
+- patrol routes
+- trade traffic
+- wilderness encounter areas
+
+Interiors may still be separate maps when necessary, but the exterior world should feel continuous.
+
+---
+
+# High-Level Map Model
+
+## The map is one surface with density bands
+
+Instead of different map scales, think in terms of **content density zones** inside one scale.
+
+### Dense zones
+Examples:
+
+- cities
+- town centers
+- forts
+- temple compounds
+- market districts
+- station hubs
+- key quest locations
+
+These have:
+
+- many interactables
+- NPC schedules
+- multiple buildings
+- layered quest content
+- short-distance navigation density
+
+### Medium-density zones
+Examples:
+
+- village outskirts
+- road networks
+- farmland
+- industrial edges
+- forests near settlements
+- defended passes
+
+These have:
+
+- moderate encounter density
+- some discovery
+- route choice
+- visible traffic and patrols
+
+### Low-density zones
+Examples:
+
+- wilderness expanses
+- deep desert
+- open plains
+- mountain stretches
+- marshland
+- asteroid-field transit corridors
+
+These have:
+
+- lower object density
+- fewer interactables per minute
+- stronger emphasis on travel, atmosphere, resource drain, and danger
+
+This keeps one scale without requiring every tile to carry equal authored weight.
+
+---
+
+# Recommended Production Structure
+
+## Build the world from cells, not from separate player map modes
+
+Under the hood, divide the world into cells/chunks.
+
+For example:
+
+- 32x32 tiles per chunk
+- 64x64 tiles per chunk
+- or another convenient streaming size
+
+Each chunk stores:
+
+- terrain data
+- static objects
+- interactables
+- spawn tables
+- faction presence markers
+- weather/state overlays
+- quest-state deltas
+- traffic route metadata
+
+The player should not care about the chunk.
+The engine cares about the chunk.
+
+---
+
+# Map Size Philosophy
+
+## Do not chase gigantic raw size for its own sake
+
+The important lesson from old CRPG maps is not just “big map good.”
+
+It is:
+
+- a map feels big when distance matters
+- a map feels real when features are spatially coherent
+- a map feels memorable when routes and landmarks are learnable
+- a map feels playable when density is controlled
+
+A giant world at one scale can easily become dead space.
+
+So the target is not maximum tiles.
+The target is **maximum meaningful continuity**.
+
+---
+
+# A Good Single-Scale CRPG World Needs
+
+## 1. Strong landmark spacing
+
+Landmarks must be placed so the player can build a mental map.
+
+Examples:
+
+- shrine on hill
+- broken aqueduct
+- wreck field
+- old watchtower
+- forked road with gallows
+- sulfur flats near mine entrance
+- unique asteroid silhouette near pirate route
+
+This matters more than raw map size.
+
+---
+
+## 2. Routes with identity
+
+Roads and travel corridors should not just connect points.
+They should have personality.
+
+Examples:
+
+- safe imperial road with checkpoints
+- smuggler trail with blind ravines
+- monster-haunted forest path
+- pilgrim route with shrines and camps
+- old war road with ruined artillery towers
+- quiet trade lane that becomes dangerous after faction collapse
+
+The player should learn routes the same way they learn dungeon layouts.
+
+---
+
+## 3. Distance with payoff
+
+If the world is single-scale, distance must be justified.
+
+Distance can produce:
+
+- risk
+- changing ecology
+- resource pressure
+- changing faction control
+- social difference
+- discovery pacing
+- anticipation
+
+Bad distance is empty walking.
+Good distance is travel with changing context.
+
+---
+
+# Suggested World Layout Model
+
+## Ring-and-corridor structure
+
+A practical continuous CRPG map often works best when laid out as:
+
+- hubs
+- corridors
+- wilderness pockets
+- edge territories
+
+### Hubs
+Major cities, forts, ports, stations
+
+### Corridors
+Roads, valleys, coastlines, jump channels, canyon routes
+
+### Wilderness pockets
+Off-route spaces with ruins, secrets, monsters, hermits, side quests
+
+### Edge territories
+Remote dangerous areas that feel farther from law and support
+
+This gives continuity without requiring uniform density everywhere.
+
+---
+
+# Player Travel Experience
+
+## Travel should remain embodied
+
+The player should usually traverse the world physically.
+
+That gives you:
+
+- ambushes that happen in real locations
+- visible patrol patterns
+- discovery by sightline and curiosity
+- a better sense of “where things are”
+- emotional memory tied to place
+
+This is the core advantage of the Ultima-style model.
+
+---
+
+## But physical travel still needs compression tools
+
+A single-scale world does not mean “force the player to manually walk everything forever.”
+
+Good support systems include:
+
+- recall points / gates / ferries / transit beacons
+- mounts / vehicles / ships
+- discovered-route fast travel
+- camp systems
+- caravans / public transport
+- player bases as routing anchors
+
+These should reduce repetition **after** geography has been learned.
+
+That preserves world reality without turning revisits into friction.
+
+---
+
+# Settlements in a Single-Scale World
+
+## Settlements should occupy real footprint
+
+A city should not just be an icon with a separate map unless necessary.
+
+Instead:
+
+- approach roads lead into outer farms or ruins
+- walls and gatehouses occupy real space
+- nearby terrain affects city behavior
+- district placement reflects history and power
+
+This lets:
+
+- sieges matter spatially
+- trade routes feel real
+- crime and class geography become visible
+- faction presence affect approach and access
+
+---
+
+# Wilderness in a Single-Scale World
+
+## Wilderness cannot just be filler between cities
+
+Its functions are:
+
+- route variation
+- atmosphere
+- danger
+- secret placement
+- faction maneuver space
+- resource gathering
+- encounter staging
+- boundary softening between major authored sites
+
+A wilderness band should answer at least one of these questions:
+
+- what lives here?
+- who uses this route?
+- why does this terrain matter?
+- what can happen here that cannot happen in town?
+
+If it answers none, it is probably waste.
+
+---
+
+# Dungeons and Interiors
+
+## Interiors may still be separate maps
+
+A single-scale exterior world does not require every building interior to exist at full exterior scale.
+
+Separate maps are still useful for:
+
+- performance
+- density
+- verticality
+- lighting
+- setpiece design
+- tactical combat
+
+The key is that the entrance should exist in the world in a physically coherent place.
+
+So the player feels:
+
+- this cave is under that ridge
+- this crypt is beneath that chapel
+- this station core is inside that complex
+
+This preserves geographic truth even when the interior is instanced.
+
+---
+
+# Faction and Simulation Implications
+
+## The world map itself becomes the visible simulation surface
+
+Since there is no macro travel layer, faction change must appear directly in the navigable world.
+
+Examples:
+
+- patrol banners change on roads
+- checkpoints appear or vanish
+- caravans reroute
+- burned farms remain after raids
+- refugees gather near gates
+- bridges get fortified
+- ruins become occupied
+- monster range expands into old roads
+- toll stations change ownership
+- smuggler routes gain more lookouts
+
+This is powerful because the player literally walks through the consequences.
+
+---
+
+# Recommended Technical Model
+
+## World cells with persistent state overlays
+
+Each chunk/cell should support layered state:
+
+### Base layer
+- terrain
+- roads
+- water
+- structures
+- vegetation
+
+### Static authored layer
+- containers
+- doors
+- landmarks
+- puzzle objects
+- permanent NPC homes
+
+### Dynamic simulation layer
+- faction controller
+- threat rating
+- traffic density
+- active patrol templates
+- local law level
+- scarcity/prosperity markers
+- weather modifiers
+- contamination/corruption/fire state
+
+### Quest delta layer
+- destroyed bridge
+- opened crypt
+- reclaimed fort
+- dead NPC
+- unlocked shortcut
+- placed barricade
+- triggered setpiece aftermath
+
+This lets the world stay continuous while still being highly reactive.
+
+---
+
+# Scale Targets
+
+## Practical size for a handcrafted CRPG
+
+For a single-scale CRPG, you want a world that is:
+
+- large enough to feel like a real country/region/system cluster
+- small enough to maintain authored density
+
+A good target is not “millions of tiles.”
+A good target is a world the player can:
+
+- gradually memorize
+- cross in a meaningful amount of time
+- revisit without confusion
+- see change within
+
+---
+
+## Example structure
+
+A campaign world might contain:
+
+- 4 to 8 major hubs
+- 10 to 20 minor settlements or outposts
+- 20 to 40 wilderness or route subregions
+- 30 to 80 notable side locations
+- 40 to 120 interiors/dungeons
+- a continuous connective overworld between them
+
+That is already large in practice if the traversal is embodied.
+
+---
+
+# How to Prevent Empty-Map Syndrome
+
+## Use layered density, not constant density
+
+Do not attempt to make every screen equally eventful.
+
+Instead use alternating rhythms:
+
+- safe route stretch
+- visual landmark
+- fork
+- small encounter
+- quiet travel
+- ruined site
+- patrol crossing
+- quest location
+- settlement edge
+
+This creates momentum without saturation.
+
+---
+
+## Use visibility and anticipation
+
+The player should often see places before reaching them:
+
+- smoke on horizon
+- tower silhouette
+- station lights
+- bridge across canyon
+- distant ruins
+- road checkpoint torch line
+- strange geological formation
+
+This makes travel feel purposeful.
+
+---
+
+## Use recurring spaces with changed state
+
+A single-scale world gets much stronger when the player revisits familiar routes and notices changes.
+
+Examples:
+
+- same road, now militarized
+- same village, now starving
+- same ruin, now occupied
+- same forest path, now corrupted
+- same station dock, now closed by strike
+
+This gives continuity real narrative value.
+
+---
+
+# Fast Travel Philosophy
+
+## Do not begin with unrestricted fast travel
+
+In a single-scale world, geography is part of the game.
+If the player can instantly skip everything too early, the map loses meaning.
+
+Recommended approach:
+
+### Early game
+- mostly physical travel
+- limited transport nodes
+- route learning matters
+
+### Mid game
+- unlock partial network
+- ferries, caravans, gates, flight lanes, relay beacons
+
+### Late game
+- robust fast travel between known anchors
+- but dangerous or unstable areas may still require manual approach
+
+This preserves the value of the world while reducing repetition.
+
+---
+
+# Why This Model Works for a CRPG
+
+## Strengths
+
+- strong immersion
+- memorable geography
+- visible consequence
+- better environmental storytelling
+- more meaningful faction presence
+- player learns routes and territories naturally
+- easier emotional attachment to places
+
+## Weaknesses
+
+- more demanding content layout
+- easy to accidentally create dead space
+- traversal repetition can become a problem
+- more complex streaming/persistence requirements
+
+So this model works best when the world is designed around **meaningful continuity**, not mere scale.
+
+---
+
+# Final Design Rule
+
+## Build one world, not three disguised as one
+
+If using Ultima VI / VII as the reference point, the correct lesson is:
+
+- keep the player grounded in one navigable world scale
+- let technical chunking stay technical
+- use density bands, travel tools, and persistent state to manage scope
+- make geography itself part of role-playing, questing, and simulation
+
+The player should feel:
+“I know this world because I have moved through it.”
+
+That is the real power of the model.
+
+---
+
+# Short Version
+
+## Recommended mapping model
+
+- one continuous player-scale overworld
+- chunked internally for streaming and persistence
+- settlements, roads, wilderness, and landmarks all exist in the same navigable space
+- interiors can be instanced, but entrances remain geographically coherent
+- density varies by zone, but player scale does not
+- faction/state change appears directly in the world
+- fast travel unlocks later as a convenience, not as the primary structure
+
+This is the cleanest CRPG interpretation of the Ultima VI / VII approach.

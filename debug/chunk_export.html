@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chunk Bitmap Exporter</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #ccc; font: 13px/1.4 monospace; }
+
+    #controls {
+      position: sticky; top: 0; z-index: 20;
+      background: #1a1a1a; border-bottom: 1px solid #333;
+      padding: 10px 14px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    }
+    #controls label { display: flex; gap: 5px; align-items: center; white-space: nowrap; }
+    #controls input[type=number] {
+      width: 70px; background: #222; border: 1px solid #444; color: #eee;
+      padding: 3px 5px; font: inherit;
+    }
+    #controls select {
+      background: #222; border: 1px solid #444; color: #eee; padding: 3px 5px; font: inherit;
+    }
+    button {
+      background: #2a4a2a; border: 1px solid #3a6a3a; color: #8f8;
+      padding: 5px 12px; cursor: pointer; font: inherit;
+    }
+    button:disabled { opacity: 0.4; cursor: default; }
+    button.dl  { background: #2a2a4a; border-color: #3a3a6a; color: #88f; }
+    #status { color: #aaa; font-size: 12px; min-width: 200px; }
+    #error-box {
+      display: none; background: #3a1a1a; border: 1px solid #a33;
+      color: #faa; padding: 10px 14px; font-size: 12px; white-space: pre-wrap;
+    }
+    #progress-wrap { width: 100%; height: 3px; background: #222; }
+    #progress-bar  { height: 3px; background: #3a6a3a; width: 0; }
+
+    #legend {
+      display: flex; flex-wrap: wrap; gap: 5px;
+      padding: 6px 14px; background: #161616; border-bottom: 1px solid #222; font-size: 11px;
+    }
+    .leg { display: flex; align-items: center; gap: 4px; }
+    .leg-sw { width: 11px; height: 11px; border: 1px solid #444; flex-shrink: 0; }
+
+    #grid { display: flex; flex-wrap: wrap; gap: 5px; padding: 10px; }
+    .cw { display: flex; flex-direction: column; align-items: center; gap: 2px; cursor: pointer; }
+    .cw:hover canvas { outline: 2px solid #8f8; }
+    .cw span { font-size: 10px; color: #666; max-width: 110px;
+               white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .cw span.s { color: #aaf; }
+  </style>
+</head>
+<body>
+
+<div id="controls">
+  <label>Seed <input id="seed" type="number" value="42"></label>
+  <label>W <input id="mw" type="number" value="80" min="20" max="640"></label>
+  <label>H <input id="mh" type="number" value="60" min="20" max="480"></label>
+  <label>Faults <input id="faults" type="number" value="0" min="0" max="12"></label>
+  <label>Tile px <input id="tilepx" type="number" value="4" min="1" max="8"></label>
+  <label>Show
+    <select id="filter">
+      <option value="all">All cells</option>
+      <option value="land">Land only</option>
+      <option value="settlement">Settlements only</option>
+    </select>
+  </label>
+  <button id="btn-gen">Generate &amp; Render</button>
+  <button id="btn-save" class="dl" disabled>Save to Folder…</button>
+  <button id="btn-dl"   class="dl" disabled>Download All</button>
+  <span id="status">Click Generate to start.</span>
+</div>
+<div id="progress-wrap"><div id="progress-bar"></div></div>
+<div id="error-box"></div>
+
+<div id="legend"></div>
+<div id="grid"></div>
+
+<script type="module">
+
+// ── Error display ─────────────────────────────────────────────────────────────
+const errBox = document.getElementById('error-box');
+function showError(e) {
+  errBox.style.display = 'block';
+  errBox.textContent = String(e?.stack ?? e);
+  console.error(e);
+}
+window.addEventListener('error', e => showError(e.error ?? e.message));
+window.addEventListener('unhandledrejection', e => showError(e.reason));
+
+// ── Imports ───────────────────────────────────────────────────────────────────
+import { WorldGen }        from '../js/macro/world_gen.js';
+import { WorldPopulator }  from '../js/macro/world_populator.js';
+import { ChunkGenerator }  from '../js/micro/chunk_gen.js';
+import { GROUND_COLOR, OBSTACLE_COLOR } from '../js/data/micro_tile_data.js';
+
+// ── Legend ────────────────────────────────────────────────────────────────────
+const GROUND_NAMES = [
+  'Deep Water','Shallow Water','Wet Sand','Sand','Dry Earth','Earth',
+  'Grass','Dry Grass','Rocky Earth','Scree','Stone','Snow',
+  'Mud','Peat','Rapids','Cobblestone','Packed Earth',
+];
+const legendEl = document.getElementById('legend');
+GROUND_NAMES.forEach((name, i) => {
+  const d = document.createElement('div');
+  d.className = 'leg';
+  d.innerHTML = `<div class="leg-sw" style="background:${GROUND_COLOR[i]}"></div>${name}`;
+  legendEl.appendChild(d);
+});
+
+// ── Render one MicroGrid to a canvas ─────────────────────────────────────────
+function hexToRgb(hex) {
+  const v = parseInt(hex.replace('#',''), 16);
+  return [(v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff];
+}
+function clamp(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+function renderChunk(grid, tilePx) {
+  const S = 64;
+  const PW = S * tilePx;
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = PW;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(PW, PW);
+  const d   = img.data;
+
+  for (let ty = 0; ty < S; ty++) {
+    for (let tx = 0; tx < S; tx++) {
+      const i   = ty * S + tx;
+      const g   = grid.ground[i];
+      const elv = grid.elevation[i];
+      const obs = grid.obstacle[i];
+      const [r0,g0,b0] = hexToRgb(GROUND_COLOR[g] ?? '#808080');
+      const et = (elv - 0.4) * 50;
+      // impassable obstacles get a red tint
+      const impass = (obs === 3 || obs === 4 || obs === 8 || obs === 9 || obs === 10 || obs === 11);
+      const r = clamp(r0 + et + (impass ? 20 : 0));
+      const gv = clamp(g0 + et - (impass ? 8 : 0));
+      const b = clamp(b0 + et - (impass ? 8 : 0));
+
+      for (let py = 0; py < tilePx; py++) {
+        for (let px = 0; px < tilePx; px++) {
+          const pi = ((ty * tilePx + py) * PW + (tx * tilePx + px)) * 4;
+          d[pi]=r; d[pi+1]=gv; d[pi+2]=b; d[pi+3]=255;
+        }
+      }
+
+      // obstacle dot (2×2 centre of tile)
+      if (obs > 0 && tilePx >= 3 && OBSTACLE_COLOR[obs]) {
+        const [or,og,ob] = hexToRgb(OBSTACLE_COLOR[obs]);
+        const dx = tx * tilePx + ((tilePx - 2) >> 1);
+        const dy = ty * tilePx + ((tilePx - 2) >> 1);
+        for (let oy = 0; oy < 2; oy++)
+          for (let ox = 0; ox < 2; ox++) {
+            const pi = ((dy+oy)*PW+(dx+ox))*4;
+            d[pi]=or; d[pi+1]=og; d[pi+2]=ob; d[pi+3]=255;
+          }
+      }
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas;
+}
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let rendered = [];
+
+// ── UI refs ───────────────────────────────────────────────────────────────────
+const btnGen  = document.getElementById('btn-gen');
+const btnSave = document.getElementById('btn-save');
+const btnDl   = document.getElementById('btn-dl');
+const statusEl  = document.getElementById('status');
+const progressEl = document.getElementById('progress-bar');
+const gridEl  = document.getElementById('grid');
+
+function setStatus(t) { statusEl.textContent = t; }
+function setProgress(v) { progressEl.style.width = (v * 100).toFixed(1) + '%'; }
+function tick() { return new Promise(r => setTimeout(r, 0)); }
+
+// ── Generate & Render ─────────────────────────────────────────────────────────
+btnGen.addEventListener('click', async () => {
+  errBox.style.display = 'none';
+  errBox.textContent = '';
+
+  const seed   = parseInt(document.getElementById('seed').value)   || 42;
+  const mapW   = parseInt(document.getElementById('mw').value)     || 80;
+  const mapH   = parseInt(document.getElementById('mh').value)     || 60;
+  const faults = parseInt(document.getElementById('faults').value) || 0;
+  const tilePx = Math.max(1, Math.min(8, parseInt(document.getElementById('tilepx').value) || 4));
+  const filter = document.getElementById('filter').value;
+
+  btnGen.disabled = btnSave.disabled = btnDl.disabled = true;
+  gridEl.innerHTML = '';
+  rendered = [];
+  setProgress(0);
+
+  try {
+    // --- World generation (synchronous, may take a second for large maps) ---
+    setStatus(`Generating ${mapW}×${mapH} world (seed ${seed})…`);
+    await tick();
+
+    const gen = new WorldGen({ mapWidth: mapW, mapHeight: mapH, numFaults: faults });
+    const map = gen.generate(seed);
+
+    setStatus('Populating…');
+    await tick();
+    const pop = new WorldPopulator();
+    pop.populate(map, seed);
+
+    // --- Collect cells to render ---
+    const cells = [];
+    map.forEach((cell, x, y) => {
+      if (!cell) return;
+      if (filter === 'land' && !cell.isLand()) return;
+      if (filter === 'settlement' && !cell.settlementType && !cell.isFarmland && !cell.isDock) return;
+      cells.push({ cell, x, y });
+    });
+
+    const total = cells.length;
+    setStatus(`Rendering ${total} chunks…`);
+    await tick();
+
+    const chunkGen = new ChunkGenerator(seed);
+
+    for (let ci = 0; ci < total; ci++) {
+      const { cell, x, y } = cells[ci];
+      const grid = chunkGen.generate(map, x, y);
+      if (!grid) continue;
+
+      const canvas = renderChunk(grid, tilePx);
+
+      const terrain = cell.terrain ?? '';
+      const stype   = cell.settlementType
+        ?? (cell.isFarmland ? 'farm' : cell.isDock ? 'dock' : '');
+      const sfam    = cell.settlementFamily   ? `_${cell.settlementFamily}`   : '';
+      const sdist   = cell.settlementDistrict ? `_${cell.settlementDistrict}` : '';
+      const tier    = cell.sizeTier   ? `_${cell.sizeTier}` : '';
+      const cond    = cell.condition  ? `_${cell.condition}` : '';
+      const sublabel = terrain + (stype ? ` [${stype}${sfam}${sdist}${tier}${cond}]` : '');
+      const filename = `chunk_${String(x).padStart(3,'0')}_${String(y).padStart(3,'0')}_${terrain}${stype ? '_'+stype+sfam+sdist : ''}.png`;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'cw';
+      wrap.title = `${x},${y} — ${sublabel}\nClick to download`;
+      canvas.addEventListener('click', () => download(canvas, filename));
+
+      const sp1 = document.createElement('span');
+      sp1.textContent = `${x},${y}`;
+      const sp2 = document.createElement('span');
+      sp2.className = 's';
+      sp2.textContent = sublabel;
+
+      wrap.append(canvas, sp1, sp2);
+      gridEl.appendChild(wrap);
+      rendered.push({ canvas, filename });
+
+      if (ci % 25 === 0) {
+        setProgress((ci + 1) / total);
+        setStatus(`Rendering ${ci + 1} / ${total}…`);
+        await tick();
+      }
+    }
+
+    setProgress(1);
+    setStatus(`Done — ${rendered.length} chunks. Click any to download, or use buttons above.`);
+    btnSave.disabled = false;
+    btnDl.disabled   = false;
+
+  } catch (e) {
+    showError(e);
+    setStatus('Error — see red box above.');
+  }
+
+  btnGen.disabled = false;
+});
+
+// ── Save to Folder (File System Access API — Chrome/Edge) ─────────────────────
+btnSave.addEventListener('click', async () => {
+  if (!('showDirectoryPicker' in window)) {
+    alert('File System Access API not available.\nUse "Download All" instead, or open in Chrome/Edge.');
+    return;
+  }
+  let dir;
+  try { dir = await window.showDirectoryPicker({ mode: 'readwrite' }); }
+  catch(e) { if (e.name !== 'AbortError') showError(e); return; }
+
+  btnSave.disabled = btnDl.disabled = true;
+  const total = rendered.length;
+  try {
+    for (let i = 0; i < total; i++) {
+      const { canvas, filename } = rendered[i];
+      const blob = await canvasBlob(canvas);
+      const fh = await dir.getFileHandle(filename, { create: true });
+      const ws = await fh.createWritable();
+      await ws.write(blob);
+      await ws.close();
+      if (i % 10 === 0) {
+        setProgress((i + 1) / total);
+        setStatus(`Saving ${i + 1} / ${total} — ${filename}`);
+        await tick();
+      }
+    }
+    setProgress(1);
+    setStatus(`Saved ${total} PNGs to "${dir.name}".`);
+  } catch(e) { showError(e); }
+
+  btnSave.disabled = false;
+  btnDl.disabled   = false;
+});
+
+// ── Download All via <a> tags ─────────────────────────────────────────────────
+btnDl.addEventListener('click', async () => {
+  btnSave.disabled = btnDl.disabled = true;
+  const total = rendered.length;
+  for (let i = 0; i < total; i++) {
+    const { canvas, filename } = rendered[i];
+    download(canvas, filename);
+    if (i % 10 === 0) {
+      setProgress((i + 1) / total);
+      setStatus(`Queuing ${i + 1} / ${total}…`);
+      await tick();
+    }
+    await new Promise(r => setTimeout(r, 60));
+  }
+  setProgress(1);
+  setStatus(`${total} downloads queued.`);
+  btnSave.disabled = false;
+  btnDl.disabled   = false;
+});
+
+// ── Utilities ─────────────────────────────────────────────────────────────────
+function canvasBlob(canvas) {
+  return new Promise(r => canvas.toBlob(r, 'image/png'));
+}
+function download(canvas, filename) {
+  const a = document.createElement('a');
+  a.href = canvas.toDataURL('image/png');
+  a.download = filename;
+  a.click();
+}
+</script>
+</body>
+</html>

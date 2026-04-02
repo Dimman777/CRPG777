@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls:*)",
+      "Bash(grep -rn \"overrides\\\\|ChunkOverrides\\\\|ChunkEditor\\\\|onEditChunk\\\\|reloadChunk\\\\|chunkOverrides\" C:Usersdmitccrpgjs --include=*.js)",
+      "Bash(find C:Usersdmitccrpg -name *.js -type f)"
+    ]
+  }
+}
