@@ -202,7 +202,9 @@ export class FormationPanel {
         this._render();
       }
     } else if (t.dataset.detail) {
-      const char = this._roster.find(c => c.id === t.dataset.detail);
+      const id   = t.dataset.detail;
+      const char = (this._playerChar?.id === id ? this._playerChar : null)
+                ?? this._roster.find(c => c.id === id);
       if (char) this._charSheet?.show(char);
     } else if (t.dataset.action === 'loose') {
       this._mode = FORMATION_MODE.LOOSE;
