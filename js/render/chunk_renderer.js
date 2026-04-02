@@ -93,6 +93,11 @@ const _ZC = new Float32Array(27); // 9 zones × 3 channels
 const ZC_CORE=0, ZC_N=3, ZC_S=6, ZC_W=9, ZC_E=12;
 const ZC_NW=15, ZC_NE=18, ZC_SW=21, ZC_SE=24;
 
+// Per-tile corner height/colour scratch — (M+1)×(M+1) shared corner grid.
+// Written after H/COL are computed; used to emit quads with interpolated heights.
+const _HC = new Float32Array((_M+1) * (_M+1));
+const _CC = new Float32Array((_M+1) * (_M+1) * 3);
+
 // ----------------------------------------------------------------
 // Module-level shared index buffers — filled once, reused by every instance.
 // The index pattern never changes: only position/colour data changes per render.
@@ -130,9 +135,12 @@ export class ChunkRenderer {
     this._floorPosAttr = new THREE.BufferAttribute(this._fPos, 3);
     this._floorColAttr = new THREE.BufferAttribute(this._fCol, 3);
     const fGeo = new THREE.BufferGeometry();
+    this._fNrm = new Float32Array(_FV * 3);
+    this._floorNrmAttr = new THREE.BufferAttribute(this._fNrm, 3);
+
     fGeo.setAttribute('position', this._floorPosAttr);
     fGeo.setAttribute('color',    this._floorColAttr);
-    fGeo.setAttribute('normal',   _FLOOR_NRM_ATTR);   // shared, never changes
+    fGeo.setAttribute('normal',   this._floorNrmAttr);
     fGeo.setIndex(_FLOOR_IDX_ATTR);                    // shared, never changes
     this._floorMesh = new THREE.Mesh(fGeo,
       new THREE.MeshLambertMaterial({ vertexColors: true }));
@@ -168,6 +176,8 @@ export class ChunkRenderer {
     this._gridMesh = new THREE.LineSegments(gridGeo,
       new THREE.LineBasicMaterial({ color: 0x222222 }));
     this._gridMesh.frustumCulled = false;
+    this._gridMesh.visible = false;
+    this._gridVisible = false;
     scene.add(this._gridMesh);
   }
 
@@ -177,7 +187,7 @@ export class ChunkRenderer {
     // Restore visibility in case this renderer was previously released to pool.
     this._floorMesh.visible = true;
     this._wallMesh.visible  = true;
-    this._gridMesh.visible  = true;
+    this._gridMesh.visible  = this._gridVisible;
     this._grid = grid;
     this._buildFloor(grid, nbrGrids);
     this._buildGrid(grid);
@@ -300,6 +310,7 @@ export class ChunkRenderer {
     // ── Persistent buffer references ─────────────────────────────────────
     const fPos = this._fPos;
     const fCol = this._fCol;
+    const fNrm = this._fNrm;
     let fvi = 0;
 
     const wPos = this._wPos, wCol = this._wCol, wNrm = this._wNrm;
@@ -346,22 +357,23 @@ export class ChunkRenderer {
         const eW = elevOf(tx-1, ty), gW = groundOf(tx-1, ty);
         const eE = elevOf(tx+1, ty), gE = groundOf(tx+1, ty);
 
-        // Precompute 9 zone colours (always — colour blending is visible even on flat tiles)
-        shadeZC (ZC_CORE, gC,  eC);
-        blend2ZC(ZC_N,    gN,  eN, gC, eC);
-        blend2ZC(ZC_S,    gS,  eS, gC, eC);
-        blend2ZC(ZC_W,    gW,  eW, gC, eC);
-        blend2ZC(ZC_E,    gE,  eE, gC, eC);
+        // Precompute 9 zone colours — each non-core slot holds the pure neighbour
+        // colour so the per-microtile dither can pick discretely between own and neighbour.
+        shadeZC(ZC_CORE, gC,  eC);
+        shadeZC(ZC_N,    gN,  eN);
+        shadeZC(ZC_S,    gS,  eS);
+        shadeZC(ZC_W,    gW,  eW);
+        shadeZC(ZC_E,    gE,  eE);
 
-        // Diagonal neighbours needed only for corner zone colours
+        // Diagonal neighbours — corner zone slots hold the diagonal neighbour colour.
         const eNW=elevOf(tx-1,ty-1), gNW=groundOf(tx-1,ty-1);
         const eNE=elevOf(tx+1,ty-1), gNE=groundOf(tx+1,ty-1);
         const eSW=elevOf(tx-1,ty+1), gSW=groundOf(tx-1,ty+1);
         const eSE=elevOf(tx+1,ty+1), gSE=groundOf(tx+1,ty+1);
-        blend4ZC(ZC_NW, gNW,eNW, gN,eN, gW,eW, gC,eC);
-        blend4ZC(ZC_NE, gNE,eNE, gN,eN, gE,eE, gC,eC);
-        blend4ZC(ZC_SW, gSW,eSW, gS,eS, gW,eW, gC,eC);
-        blend4ZC(ZC_SE, gSE,eSE, gS,eS, gE,eE, gC,eC);
+        shadeZC(ZC_NW, gNW, eNW);
+        shadeZC(ZC_NE, gNE, eNE);
+        shadeZC(ZC_SW, gSW, eSW);
+        shadeZC(ZC_SE, gSE, eSE);
 
         const wxTile = grid.macroX * S + tx;
         const wyTile = grid.macroY * S + ty;
@@ -376,17 +388,38 @@ export class ChunkRenderer {
           for (let mi = 0; mi < M; mi++) {
             for (let mj = 0; mj < M; mj++) {
               const k   = mi * M + mj;
-              const inN = mi < ZONE, inS = M-1-mi < ZONE;
-              const inW = mj < ZONE, inE = M-1-mj < ZONE;
+              const dN  = mi,     inN = dN < ZONE;
+              const dS  = M-1-mi, inS = dS < ZONE;
+              const dW  = mj,     inW = dW < ZONE;
+              const dE  = M-1-mj, inE = dE < ZONE;
               H[k] = hc;
               const zoff = (!inN&&!inS&&!inW&&!inE) ? ZC_CORE :
                             (inN&&inW) ? ZC_NW : (inN&&inE) ? ZC_NE :
                             (inS&&inW) ? ZC_SW : (inS&&inE) ? ZC_SE :
                             inN ? ZC_N : inS ? ZC_S : inW ? ZC_W : ZC_E;
-              COL[k*3]=_ZC[zoff]; COL[k*3+1]=_ZC[zoff+1]; COL[k*3+2]=_ZC[zoff+2];
+              let colZoff;
+              if (zoff === ZC_CORE) {
+                colZoff = ZC_CORE;
+              } else {
+                const depth = Math.min(inN?dN:ZONE, inS?dS:ZONE, inW?dW:ZONE, inE?dE:ZONE);
+                colZoff = (dHash(wxTile*M+mj, wyTile*M+mi) % STEPS) < (ZONE - depth)
+                          ? zoff : ZC_CORE;
+              }
+              COL[k*3]=_ZC[colZoff]; COL[k*3+1]=_ZC[colZoff+1]; COL[k*3+2]=_ZC[colZoff+2];
             }
           }
-          // No walls on flat tiles
+          // Patch the 4 corner microtiles: cardinal neighbours are all eC but
+          // diagonal neighbours may differ, so the shared world-corner height
+          // must still be computed with dHash — exactly as the full path does —
+          // so adjacent tiles produce identical values at that point.
+          { const lo4=Math.min(eC,eN,eW,eNW), hi4=Math.max(eC,eN,eW,eNW);
+            H[0]               = (lo4===hi4)?hc:(lo4+dHash(ewBdyW,nsBdyN)%STEPS*(hi4-lo4)/ZONE)*ES; }
+          { const lo4=Math.min(eC,eN,eE,eNE), hi4=Math.max(eC,eN,eE,eNE);
+            H[M-1]             = (lo4===hi4)?hc:(lo4+dHash(ewBdyE,nsBdyN)%STEPS*(hi4-lo4)/ZONE)*ES; }
+          { const lo4=Math.min(eC,eS,eW,eSW), hi4=Math.max(eC,eS,eW,eSW);
+            H[(M-1)*M]         = (lo4===hi4)?hc:(lo4+dHash(ewBdyW,nsBdyS)%STEPS*(hi4-lo4)/ZONE)*ES; }
+          { const lo4=Math.min(eC,eS,eE,eSE), hi4=Math.max(eC,eS,eE,eSE);
+            H[(M-1)*M+(M-1)]   = (lo4===hi4)?hc:(lo4+dHash(ewBdyE,nsBdyS)%STEPS*(hi4-lo4)/ZONE)*ES; }
         } else {
           // ── Full border computation ────────────────────────────────────
           for (let mi = 0; mi < M; mi++) {
@@ -446,53 +479,80 @@ export class ChunkRenderer {
               } else if (inW) { h=borderH(eC,eW,ewBdyW,wyTile*M+mi,dW); zoff=ZC_W;
               } else          { h=borderH(eC,eE,ewBdyE,wyTile*M+mi,dE); zoff=ZC_E; }
 
-              H[k]       = h;
-              COL[k*3]   = _ZC[zoff];
-              COL[k*3+1] = _ZC[zoff+1];
-              COL[k*3+2] = _ZC[zoff+2];
+              H[k] = h;
+              let colZoff;
+              if (zoff === ZC_CORE) {
+                colZoff = ZC_CORE;
+              } else {
+                const depth = Math.min(inN?dN:ZONE, inS?dS:ZONE, inW?dW:ZONE, inE?dE:ZONE);
+                colZoff = (dHash(wxTile*M+mj, wyTile*M+mi) % STEPS) < (ZONE - depth)
+                          ? zoff : ZC_CORE;
+              }
+              COL[k*3]=_ZC[colZoff]; COL[k*3+1]=_ZC[colZoff+1]; COL[k*3+2]=_ZC[colZoff+2];
             }
           }
 
-          // ── Internal micro-walls (EW steps) ───────────────────────────
-          for (let mi = 0; mi < M; mi++) {
-            for (let mj = 0; mj < M-1; mj++) {
-              const h0=H[mi*M+mj], h1=H[mi*M+mj+1];
-              if (h0 === h1) continue;
-              const ci = h0 > h1 ? mi*M+mj : mi*M+mj+1;
-              addWall(tx+(mj+1)*MF, ty+mi*MF, tx+(mj+1)*MF, ty+(mi+1)*MF,
-                      Math.min(h0,h1), Math.max(h0,h1),
-                      COL[ci*3], COL[ci*3+1], COL[ci*3+2]);
-            }
-          }
-          // ── Internal micro-walls (NS steps) ───────────────────────────
-          for (let mi = 0; mi < M-1; mi++) {
-            for (let mj = 0; mj < M; mj++) {
-              const h0=H[mi*M+mj], h1=H[(mi+1)*M+mj];
-              if (h0 === h1) continue;
-              const ci = h0 > h1 ? mi*M+mj : (mi+1)*M+mj;
-              addWall(tx+mj*MF, ty+(mi+1)*MF, tx+(mj+1)*MF, ty+(mi+1)*MF,
-                      Math.min(h0,h1), Math.max(h0,h1),
-                      COL[ci*3], COL[ci*3+1], COL[ci*3+2]);
-            }
-          }
         } // end full-computation branch
 
-        // ── Emit floor quads ─────────────────────────────────────────────
+        // ── Corner averaging — (M+1)×(M+1) grid of shared quad corners ──
+        // Each corner (ci,cj) averages the H and COL of the 1–4 microtiles
+        // that share it.  Adjacent quads reference the same _HC/_CC entries,
+        // so the mesh is continuous — no intra-tile walls needed.
+        // Average neighbouring microtile heights into shared quad corners (HC only).
+        // Colour is NOT averaged here — each quad uses its own discrete dithered COL.
+        const MP1 = M + 1;
+        for (let ci = 0; ci <= M; ci++) {
+          for (let cj = 0; cj <= M; cj++) {
+            let hSum=0, cnt=0;
+            for (let di = -1; di <= 0; di++) {
+              for (let dj = -1; dj <= 0; dj++) {
+                const ni = ci+di, nj = cj+dj;
+                if (ni >= 0 && ni < M && nj >= 0 && nj < M) {
+                  hSum += H[ni*M+nj]; cnt++;
+                }
+              }
+            }
+            _HC[ci*MP1+cj] = hSum/cnt;
+          }
+        }
+
+        // ── Emit floor quads with per-corner heights, colours, normals ───
         for (let mi = 0; mi < M; mi++) {
           for (let mj = 0; mj < M; mj++) {
-            const k  = mi * M + mj;
             const x0 = tx + mj * MF, x1 = x0 + MF;
             const z0 = ty + mi * MF, z1 = z0 + MF;
-            const y  = H[k];
-            const r  = COL[k*3], g = COL[k*3+1], b = COL[k*3+2];
+
+            const cNW = mi*MP1+mj,     cNE = mi*MP1+mj+1;
+            const cSW = (mi+1)*MP1+mj, cSE = (mi+1)*MP1+mj+1;
+            const yNW=_HC[cNW], yNE=_HC[cNE], ySW=_HC[cSW], ySE=_HC[cSE];
+
             const vb = fvi;
-            fPos[vb*3  ]=x0; fPos[vb*3+1]=y;  fPos[vb*3+2]=z0;
-            fPos[vb*3+3]=x1; fPos[vb*3+4]=y;  fPos[vb*3+5]=z0;
-            fPos[vb*3+6]=x0; fPos[vb*3+7]=y;  fPos[vb*3+8]=z1;
-            fPos[vb*3+9]=x1; fPos[vb*3+10]=y; fPos[vb*3+11]=z1;
-            for (let c=0; c<4; c++) {
-              fCol[(vb+c)*3]=r; fCol[(vb+c)*3+1]=g; fCol[(vb+c)*3+2]=b;
-            }
+            fPos[vb*3  ]=x0; fPos[vb*3+1]=yNW; fPos[vb*3+2]=z0;  // v0 NW
+            fPos[vb*3+3]=x1; fPos[vb*3+4]=yNE; fPos[vb*3+5]=z0;  // v1 NE
+            fPos[vb*3+6]=x0; fPos[vb*3+7]=ySW; fPos[vb*3+8]=z1;  // v2 SW
+            fPos[vb*3+9]=x1; fPos[vb*3+10]=ySE;fPos[vb*3+11]=z1; // v3 SE
+
+            // Uniform discrete colour — all 4 vertices of this quad share the
+            // microtile's dithered pick so there is no GPU gradient across the quad.
+            const k  = mi * M + mj;
+            const cr = COL[k*3], cg = COL[k*3+1], cb = COL[k*3+2];
+            fCol[vb*3  ]=cr; fCol[vb*3+1]=cg; fCol[vb*3+2]=cb;
+            fCol[(vb+1)*3]=cr; fCol[(vb+1)*3+1]=cg; fCol[(vb+1)*3+2]=cb;
+            fCol[(vb+2)*3]=cr; fCol[(vb+2)*3+1]=cg; fCol[(vb+2)*3+2]=cb;
+            fCol[(vb+3)*3]=cr; fCol[(vb+3)*3+1]=cg; fCol[(vb+3)*3+2]=cb;
+
+            // Quad normal: cross(diag SE−NW, diag NE−SW).
+            // n = MF * (−(dy1+dy2), 2·MF, dy2−dy1)  where dy1=ySE−yNW, dy2=yNE−ySW
+            const dy1 = ySE-yNW, dy2 = yNE-ySW;
+            const nx = -(dy1+dy2), ny = 2*MF, nz = dy2-dy1;
+            const nl = Math.sqrt(nx*nx + ny*ny + nz*nz);
+            const nnx=nx/nl, nny=ny/nl, nnz=nz/nl;
+            const nb = vb*3;
+            fNrm[nb  ]=nnx; fNrm[nb+1]=nny; fNrm[nb+2]=nnz;
+            fNrm[nb+3]=nnx; fNrm[nb+4]=nny; fNrm[nb+5]=nnz;
+            fNrm[nb+6]=nnx; fNrm[nb+7]=nny; fNrm[nb+8]=nnz;
+            fNrm[nb+9]=nnx; fNrm[nb+10]=nny;fNrm[nb+11]=nnz;
+
             fvi += 4;
           }
         }
@@ -504,6 +564,7 @@ export class ChunkRenderer {
     // ── Mark attributes dirty for re-upload to existing GPU buffers ──────
     this._floorPosAttr.needsUpdate = true;
     this._floorColAttr.needsUpdate = true;
+    this._floorNrmAttr.needsUpdate = true;
     if (wvi > 0) {
       this._wallPosAttr.needsUpdate = true;
       this._wallColAttr.needsUpdate = true;
@@ -513,44 +574,49 @@ export class ChunkRenderer {
   }
 
   // ----------------------------------------------------------------
-  // Grid overlay — micro-tile line segments
+  // Grid overlay — 1m tile-boundary lines only (no micro-tile subdivisions).
+  // Visible only in turn-based mode; controlled via setGridMode().
   // ----------------------------------------------------------------
   _buildGrid(grid) {
-    const S  = _S, M = _M, MF = _MF, OFF = 0.03;
-    const te = this._tileElev;
+    const S   = _S, OFF = 0.03;
+    const te  = this._tileElev;
     const pts = this._gridPts;
     let pi = 0;
 
     for (let ty = 0; ty < S; ty++) {
       for (let tx = 0; tx < S; tx++) {
-        const y = te[ty * S + tx] + OFF;
-        for (let m = 1; m < M; m++) {
-          const f = m * MF;
-          pts[pi++]=tx;   pts[pi++]=y; pts[pi++]=ty+f;
-          pts[pi++]=tx+1; pts[pi++]=y; pts[pi++]=ty+f;
-          pts[pi++]=tx+f; pts[pi++]=y; pts[pi++]=ty;
-          pts[pi++]=tx+f; pts[pi++]=y; pts[pi++]=ty+1;
-        }
+        const y  = te[ty * S + tx] + OFF;
+        // North edge of this tile (shared with south edge of tile above)
         const yN = ty > 0 ? Math.max(y, te[(ty-1)*S+tx]+OFF) : y;
         pts[pi++]=tx;   pts[pi++]=yN; pts[pi++]=ty;
         pts[pi++]=tx+1; pts[pi++]=yN; pts[pi++]=ty;
+        // West edge of this tile (shared with east edge of tile to the left)
         const yW = tx > 0 ? Math.max(y, te[ty*S+(tx-1)]+OFF) : y;
         pts[pi++]=tx; pts[pi++]=yW; pts[pi++]=ty;
         pts[pi++]=tx; pts[pi++]=yW; pts[pi++]=ty+1;
       }
     }
+    // Closing east column
     for (let ty = 0; ty < S; ty++) {
       const y = te[ty * S + (S-1)] + OFF;
       pts[pi++]=S; pts[pi++]=y; pts[pi++]=ty;
       pts[pi++]=S; pts[pi++]=y; pts[pi++]=ty+1;
     }
+    // Closing south row
     for (let tx = 0; tx < S; tx++) {
       const y = te[(S-1)*S+tx] + OFF;
       pts[pi++]=tx;   pts[pi++]=y; pts[pi++]=S;
       pts[pi++]=tx+1; pts[pi++]=y; pts[pi++]=S;
     }
 
+    this._gridMesh.geometry.setDrawRange(0, pi / 3);
     this._gridPosAttr.needsUpdate = true;
+  }
+
+  // Show or hide the 1m tile grid (call from MicroWorld on turn-mode change).
+  setGridMode(visible) {
+    this._gridVisible = visible;
+    this._gridMesh.visible = visible;
   }
 
   // ----------------------------------------------------------------

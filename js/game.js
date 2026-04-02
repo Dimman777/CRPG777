@@ -513,6 +513,7 @@ export class Game {
       this._updateStopHighlights();
       this._actionBar.setVisible(isPlayerTurn);
       this._turnHud.update(tc, this._followerMgr.followers, this._actionMode, tc.playerRanLastTurn);
+      this.microWorld.setGridVisible(tc.isActive);
     };
     // Delegate follower movement to FollowerManager so tight/loose logic is used
     this._turnController.onFollowerTurn = (idx, player, grid) => {

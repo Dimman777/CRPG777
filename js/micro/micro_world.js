@@ -99,8 +99,11 @@ export class MicroWorld {
           );
         }
         this._queueRerender(item.key);
-        for (const [ddx, ddy] of [[0,-1],[1,0],[0,1],[-1,0]])
-          this._queueRerender(`${item.mx+ddx},${item.my+ddy}`);
+        // Include diagonal neighbours: their outermost corners depend on the
+        // newly loaded chunk's elevation data via the dHash corner formula.
+        for (let ddy = -1; ddy <= 1; ddy++)
+          for (let ddx = -1; ddx <= 1; ddx++)
+            if (ddx || ddy) this._queueRerender(`${item.mx+ddx},${item.my+ddy}`);
       }
     }
 
@@ -144,8 +147,16 @@ export class MicroWorld {
         // edge retain their existing renders: their visible seams did not change.
         this._rerenderQueue = [];
         const centreKey = `${this._mx},${this._my}`;
-        for (const key of newlyLoaded) this._queueRerender(key);
-        this._queueRerender(centreKey); // no-op if centreKey is in newlyLoaded
+        for (const key of newlyLoaded) {
+          this._queueRerender(key);
+          // Also queue already-loaded diagonal neighbours of each new chunk:
+          // their outermost corners change now that they have a new diagonal peer.
+          const [kx, ky] = key.split(',').map(Number);
+          for (let ddy = -1; ddy <= 1; ddy++)
+            for (let ddx = -1; ddx <= 1; ddx++)
+              if (ddx || ddy) this._queueRerender(`${kx+ddx},${ky+ddy}`);
+        }
+        this._queueRerender(centreKey); // no-op if centreKey is already queued
 
         this._dispatchCellChange();
       }
@@ -200,6 +211,13 @@ export class MicroWorld {
   get player()        { return this._player; }
   get centreGrid()    { return this._centreChunk?.grid     ?? null; }
   get centreRenderer(){ return this._centreChunk?.renderer ?? null; }
+
+  // Show or hide the 1m tile grid on all active chunk renderers.
+  setGridVisible(visible) {
+    for (const { renderer } of this._chunks.values()) {
+      renderer.setGridMode(visible);
+    }
+  }
 
   // Callback slot — set by Game to receive chunk-transition tile offsets
   // so FollowerManager can adjust follower positions in sync with the player.
