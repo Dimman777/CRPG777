@@ -380,6 +380,9 @@
     import { BitmapWorldLoader }  from './js/macro/bitmap_world_loader.js';
     import { ChunkOverrides }     from './js/core/chunk_overrides.js';
     import { ChunkEditor }        from './js/ui/chunk_editor.js';
+    import { CHARACTERS }         from './js/data/characters_data.js';
+    import { CharacterSheet }     from './js/ui/character_sheet.js';
+    import { HeroSelect }         from './js/ui/hero_select.js';
 
     const overlay    = document.getElementById('map-preview-overlay');
     const canvas     = document.getElementById('map-preview-canvas');
@@ -400,6 +403,13 @@
     let   chunkGen  = null;
     let   flashTimer = null;
     let   preGame   = true;  // true until game.start() is called
+
+    // Hero select — shown after map cell is chosen, before game starts.
+    const charSheet  = new CharacterSheet();
+    const heroSelect = new HeroSelect(CHARACTERS, charSheet);
+    heroSelect.onSelect = (heroId, gameOpts) => {
+      enterGame({ ...gameOpts, heroId });
+    };
 
     // Chunk editor — single instance, re-used for every cell.
     const editor = new ChunkEditor();
@@ -502,17 +512,20 @@
         overlay.classList.remove('visible');
         stopFlash();
       } else {
-        // Pre-game: start the adventure at this cell
+        // Pre-game: show hero select before starting the adventure
         const seed   = parseInt(document.getElementById('map-seed-input').value) || 42;
         const faults = parseInt(document.getElementById('map-faults-select').value) ?? 0;
-        enterGame({
+        const gameOpts = {
           macroMap:  lastMap,
           worldData: lastWorld,
           seed,
           numFaults: faults,
           startMx:   mx,
           startMy:   my,
-        });
+        };
+        overlay.classList.remove('visible');
+        stopFlash();
+        heroSelect.show(gameOpts);
       }
     };
 

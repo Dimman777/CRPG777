@@ -27,10 +27,12 @@ import { Compass }         from './ui/compass.js';
 import { FollowerManager } from './micro/follower_manager.js';
 import { FollowerVisuals } from './render/follower_visuals.js';
 import { FormationPanel }  from './ui/formation_panel.js';
+import { CharacterSheet }  from './ui/character_sheet.js';
 import { TurnController }  from './micro/turn_controller.js';
 import { TurnHud }         from './ui/turn_hud.js';
 import { ActionBar }       from './ui/action_bar.js';
 import { ChunkOverrides }  from './core/chunk_overrides.js';
+import { CHARACTERS, getCharacter } from './data/characters_data.js';
 
 const GRID_W               = 10;
 const GRID_H               = 10;
@@ -94,9 +96,14 @@ export class Game {
     this._actionMode           = 'none'; // 'none' | 'move' | 'run' | 'stop'
     this._facingAtTurnStart    = 0;     // player legAngle at the start of each PLAYER turn
     this._chunkOverrides       = null;  // ChunkOverrides — shared with the macro map editor
+    this._playerCharId         = 'grendoli';
+    this._charSheet            = null;
+    this._contextMenu          = null;  // right-click follower context menu div
   }
 
   start(worldOpts = {}) {
+    this._playerCharId = worldOpts.heroId ?? 'grendoli';
+    this._charSheet    = new CharacterSheet();
     const viewport = document.getElementById('game-viewport');
     this.scene            = new SceneSetup(viewport);
     this.cameraController = new CameraController(viewport.clientWidth, viewport.clientHeight);
@@ -284,14 +291,102 @@ export class Game {
         return pos ? { tx: Math.floor(pos.x), tz: Math.floor(pos.z) } : null;
       };
 
+      // ── Follower context menu ─────────────────────────────────────────────────
+      // A small floating div that appears when the player right-clicks near a follower.
+      this._contextMenu = document.createElement('div');
+      this._contextMenu.style.cssText = [
+        'display:none',
+        'position:fixed',
+        'z-index:400',
+        'background:#0e0e18',
+        'border:1px solid #334',
+        'border-radius:3px',
+        'font-family:monospace',
+        'font-size:12px',
+        'color:#ccc',
+        'min-width:160px',
+        'box-shadow:0 4px 16px rgba(0,0,0,0.6)',
+        'overflow:hidden',
+      ].join(';');
+      document.body.appendChild(this._contextMenu);
+
+      const hideContextMenu = () => {
+        this._contextMenu.style.display = 'none';
+      };
+      document.addEventListener('click',     hideContextMenu);
+      document.addEventListener('keydown',   hideContextMenu);
+      vpEl.addEventListener('contextmenu',   hideContextMenu);
+
+      const showContextMenu = (follower, screenX, screenY) => {
+        const char = follower.charData;
+        this._contextMenu.innerHTML = `
+          <div style="padding:8px 12px 6px;border-bottom:1px solid #222">
+            <div style="font-size:13px;color:#e8dcc8">${follower.name}</div>
+            ${char ? `<div style="font-size:10px;color:#556;margin-top:1px">${char.role.toUpperCase()}</div>` : ''}
+          </div>
+          <button id="ctx-sheet"
+            style="display:block;width:100%;padding:7px 12px;text-align:left;
+                   font-family:monospace;font-size:11px;background:transparent;
+                   color:#aab8cc;border:none;cursor:pointer;
+                   border-bottom:1px solid #1a1a28">
+            Character Sheet
+          </button>
+          <button id="ctx-dismiss"
+            style="display:block;width:100%;padding:7px 12px;text-align:left;
+                   font-family:monospace;font-size:11px;background:transparent;
+                   color:#886655;border:none;cursor:pointer">
+            Dismiss
+          </button>`;
+
+        // Position near cursor but keep on-screen
+        const menuW = 170, menuH = 90;
+        let mx = screenX + 4, my = screenY + 4;
+        if (mx + menuW > window.innerWidth)  mx = screenX - menuW - 4;
+        if (my + menuH > window.innerHeight) my = screenY - menuH - 4;
+        this._contextMenu.style.left    = mx + 'px';
+        this._contextMenu.style.top     = my + 'px';
+        this._contextMenu.style.display = 'block';
+
+        this._contextMenu.querySelector('#ctx-sheet')?.addEventListener('click', e => {
+          e.stopPropagation();
+          hideContextMenu();
+          if (char) this._charSheet?.show(char);
+        });
+        this._contextMenu.querySelector('#ctx-dismiss')?.addEventListener('click', e => {
+          e.stopPropagation();
+          hideContextMenu();
+          if (follower.charId) this._formationPanel.setActive(
+            this._followerMgr.followers
+              .map(f => f.charId)
+              .filter(id => id && id !== follower.charId),
+          );
+        });
+      };
+
+      // Hit-test: find the follower closest to the world-space click point.
+      const followerAtPos = pos => {
+        if (!pos) return null;
+        const HIT_R = 0.85;
+        let best = null, bestD = HIT_R;
+        for (const f of this._followerMgr.followers) {
+          const d = Math.hypot(pos.x - f.px, pos.z - f.py);
+          if (d < bestD) { bestD = d; best = f; }
+        }
+        return best;
+      };
+
       // ── Right-click hold: free-roam mouse movement ───────────────────────────
       // Direction = player → cursor.  Speed ramps with distance (0.5–5 tiles).
+      // Intercept: if the initial click lands on a follower, show the context menu instead.
+      let _followerHit = null;
       vpEl.addEventListener('mousedown', e => {
         if (e.button !== 2) return;
         if (this._turnController?.isActive) return; // turn mode uses contextmenu
         e.preventDefault();
-        _rmouseDown = true;
         const pos = worldPosFromEvent(e);
+        _followerHit = followerAtPos(pos);
+        if (_followerHit) return; // context menu shown on mouseup
+        _rmouseDown = true;
         if (pos) { _rmouseX = pos.x; _rmouseZ = pos.z; }
       });
 
@@ -301,12 +396,21 @@ export class Game {
         if (pos) { _rmouseX = pos.x; _rmouseZ = pos.z; }
       });
 
-      const stopMouseMove = () => {
+      vpEl.addEventListener('mouseup', e => {
+        if (e.button !== 2) return;
+        if (_followerHit) {
+          showContextMenu(_followerHit, e.clientX, e.clientY);
+          _followerHit = null;
+          return;
+        }
         _rmouseDown = false;
         this.microWorld.player?.clearMouseMove();
-      };
-      vpEl.addEventListener('mouseup',    e => { if (e.button === 2) stopMouseMove(); });
-      vpEl.addEventListener('mouseleave', stopMouseMove);
+      });
+      vpEl.addEventListener('mouseleave', () => {
+        _followerHit = null;
+        _rmouseDown = false;
+        this.microWorld.player?.clearMouseMove();
+      });
 
       // Suppress the browser context menu on the viewport in all modes.
       vpEl.addEventListener('contextmenu', e => e.preventDefault());
@@ -437,10 +541,17 @@ export class Game {
     // Followers
     this._followerMgr    = new FollowerManager();
     this._followerVis    = new FollowerVisuals(this.scene.scene);
-    this._formationPanel = new FormationPanel();
+    this._formationPanel = new FormationPanel(this._charSheet);
 
-    this._formationPanel.onCountChange = n => {
-      this._followerMgr.setCount(n, this.microWorld.player);
+    // Show the PC as slot #1, then the rest of the roster as recruitable companions
+    const playerChar = getCharacter(this._playerCharId);
+    this._formationPanel.setPlayerCharacter(playerChar);
+    const roster = CHARACTERS.filter(c => c.id !== this._playerCharId);
+    this._formationPanel.setRoster(roster);
+
+    this._formationPanel.onRosterChange = activeIds => {
+      const charData = activeIds.map(id => getCharacter(id)).filter(Boolean);
+      this._followerMgr.setActiveFollowers(charData, this.microWorld.player);
     };
     this._formationPanel.onModeChange = mode => {
       this._followerMgr.setMode(mode);

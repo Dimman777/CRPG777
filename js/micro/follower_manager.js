@@ -34,6 +34,7 @@ const FORMATION_SLOTS = [
   [ 0.0,  7.0],  // 7 trail
 ];
 
+// Fallback names/colors used only when no character data is provided.
 const FOLLOWER_NAMES  = ['Bram','Vera','Dunstan','Lyra','Edda','Gorn','Sable','Rook'];
 const FOLLOWER_COLORS = [
   0x4499cc, 0xcc7744, 0x44cc66, 0x9944cc,
@@ -98,38 +99,73 @@ export class FollowerManager {
     while (this._followers.length < n) {
       const idx = this._followers.length;
       const [sx, sz] = this._slotPos(px, pz, hx, hz, idx);
-      this._followers.push({
-        id:          `follower_${idx}`,
-        name:        FOLLOWER_NAMES[idx],
-        color:       FOLLOWER_COLORS[idx],
-        slot:        idx,
-        px:          sx,
-        py:          sz,
-        worldY:      0,
-        headingX:    hx,
-        headingZ:    hz,
-        legAngle:       Math.atan2(hx, hz),
-        torsoOffset:    0,
-        headOffset:     0,
-        headLookTarget: 0,
-        headLookTimer:  idx * 0.7 + Math.random() * 3 + 1, // stagger so heads don't all move at once
-        state:          STATE.FOLLOWING,
-        stateTimer:     idx * 1.5 + Math.random() * 2, // stagger so they don't all wander at once
-        targetPx:    sx,
-        targetPy:    sz,
-        chatPartner: null,
-        showBanter:  false,
-        banterTimer: 0,
-        showQuip:    false,
-        quipText:    '',
-        quipTimer:   0,
-        blockTimer:   0,
-        idleCol:      0,
-        idleRow:      0,
-        ranLastTurn:  false, // momentum flag
-      });
+      this._followers.push(this._makeFollower(
+        { id: `anon_${idx}`, name: FOLLOWER_NAMES[idx], color: FOLLOWER_COLORS[idx] },
+        idx, sx, sz, hx, hz,
+      ));
     }
     while (this._followers.length > n) this._followers.pop();
+  }
+
+  // Replace the active follower list with characters from the given charData array.
+  // Existing followers whose charId is still in the list keep their current position.
+  // New followers are spawned at their slot position.
+  setActiveFollowers(charDataArray, player) {
+    const n  = Math.min(charDataArray.length, 8);
+    const px = player?.px ?? 32, pz = player?.py ?? 32;
+    const hx = player?.headingX ?? 0, hz = player?.headingZ ?? 1;
+
+    // Index existing followers by charId so we can preserve their positions.
+    const keep = new Map(this._followers.map(f => [f.charId, f]));
+
+    const next = [];
+    for (let idx = 0; idx < n; idx++) {
+      const char     = charDataArray[idx];
+      const existing = keep.get(char.id);
+      if (existing) {
+        existing.slot = idx;
+        next.push(existing);
+      } else {
+        const [sx, sz] = this._slotPos(px, pz, hx, hz, idx);
+        next.push(this._makeFollower(char, idx, sx, sz, hx, hz));
+      }
+    }
+    this._followers = next;
+  }
+
+  _makeFollower(char, slotIdx, sx, sz, hx, hz) {
+    return {
+      id:             `follower_${char.id}`,
+      charId:         char.id,
+      charData:       char,
+      name:           char.name,
+      color:          char.color,
+      slot:           slotIdx,
+      px:             sx,
+      py:             sz,
+      worldY:         0,
+      headingX:       hx,
+      headingZ:       hz,
+      legAngle:       Math.atan2(hx, hz),
+      torsoOffset:    0,
+      headOffset:     0,
+      headLookTarget: 0,
+      headLookTimer:  slotIdx * 0.7 + Math.random() * 3 + 1,
+      state:          STATE.FOLLOWING,
+      stateTimer:     slotIdx * 1.5 + Math.random() * 2,
+      targetPx:       sx,
+      targetPy:       sz,
+      chatPartner:    null,
+      showBanter:     false,
+      banterTimer:    0,
+      showQuip:       false,
+      quipText:       '',
+      quipTimer:      0,
+      blockTimer:     0,
+      idleCol:        0,
+      idleRow:        0,
+      ranLastTurn:    false,
+    };
   }
 
   // Adjust all positions when the centre chunk shifts (player crossed an edge).
