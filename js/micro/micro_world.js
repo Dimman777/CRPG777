@@ -153,7 +153,14 @@ export class MicroWorld {
     else if (!didWork && this._activeSlices.length === 0 && this._rerenderQueue.length > 0) {
       const key = this._rerenderQueue.shift();
       this._rerenderSet.delete(key);
-      this._rerenderIncremental(key);
+      const entry = this._chunks.get(key);
+      if (entry && entry.group.visible) {
+        // Already visible (e.g. centre chunk) — full synchronous re-render so
+        // obstacles are disposed+rebuilt in the same frame (no visible flash).
+        this._rerenderOne(key);
+      } else {
+        this._rerenderIncremental(key);
+      }
     }
 
     const centre  = this._centreChunk;
