@@ -102,7 +102,8 @@ export class Game {
     this.cameraController = new CameraController(viewport.clientWidth, viewport.clientHeight);
     this.rendering        = new Rendering(this.scene);
     this.rendering.cameraController = this.cameraController;
-    this.rendering.start();
+    // Don't start the render loop yet — wait until init is complete so the
+    // first few frames don't compete with chunk generation for CPU time.
 
     // Store listener references for cleanup on restart/destroy.
     this._onResize = () => {
@@ -132,6 +133,10 @@ export class Game {
       this.macroPanel.update(this.macroGame);
       this._flushMacroLog();
     }, MACRO_INTERVAL);
+
+    // Start the render loop AFTER all init is complete — avoids RAF competing
+    // with chunk generation on the first few frames (eliminates init jitter).
+    this.rendering.start();
 
     debug('World loaded. WASD move · Q/E rotate camera · Z/C torso · Space toggle turn mode.');
   }
