@@ -267,15 +267,29 @@ export class MicroWorld {
     // 2. Unload ALL existing chunks — clean slate
     for (const key of [...this._chunks.keys()]) this._unloadChunk(key);
 
-    // 3. Generate + render centre chunk only (~12ms)
+    // 3. Generate full 3×3 without rendering (~40ms)
     this._loadT0 = performance.now();
-    const t0 = this._loadT0;
-    this._loadChunk(this._mx, this._my, true);
-    const centre = this._centreChunk;
-    if (centre) centre.group.position.set(0, 0, 0);
-    console.log(`[load] centre in ${(performance.now() - t0).toFixed(0)}ms`);
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
+      }
 
-    // 4. Place player with precise rendered elevation
+    // 4. Position + render 3×3 with full neighbor context
+    for (const entry of this._chunks.values()) {
+      entry.group.position.set(
+        (entry.mx - this._mx) * CHUNK_SIZE, 0,
+        (entry.my - this._my) * CHUNK_SIZE,
+      );
+    }
+    for (const [key, entry] of this._chunks) {
+      this._rerenderOne(key);
+      entry.group.visible = true;
+    }
+    console.log(`[load] 3×3 in ${(performance.now() - this._loadT0).toFixed(0)}ms`);
+
+    // 5. Place player with precise rendered elevation
+    const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
       const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
@@ -285,18 +299,15 @@ export class MicroWorld {
       console.log(`[load] player placed at (${spawn.x}, ${spawn.y})`);
     }
 
-    // 5. Defer inner ring (8 chunks) then outer ring (16 chunks).
-    //    Inner ring queued first = higher priority = loads before player reaches edge.
-    //    At 7 tiles/sec the player needs ~9s to cross 64 tiles — inner ring loads in ~1.3s.
+    // 6. Defer only the outer 16 — player can't reach them for ~9 seconds
     let queued = 0;
-    for (let r = 1; r <= 2; r++)
-      for (let dy = -r; dy <= r; dy++)
-        for (let dx = -r; dx <= r; dx++) {
-          if (Math.abs(dx) < r && Math.abs(dy) < r) continue;
-          const cx = this._mx + dx, cy = this._my + dy;
-          if (map.inBounds(cx, cy)) { this._enqueueLoad(cx, cy); queued++; }
-        }
-    console.log(`[load] ${queued} chunks queued (inner ring first)`);
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) continue;
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) { this._enqueueLoad(cx, cy); queued++; }
+      }
+    console.log(`[load] ${queued} outer chunks queued`);
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
