@@ -99,7 +99,10 @@ export class MicroWorld {
       const _endLoad = _pb?.('chunkLoad');
       const grid = this._chunkGen.generatePhase2(p.partial, this._overrides);
       _endLoad?.();
-      if (grid) this._finishChunkLoad(p.mx, p.my, p.key, grid);
+      if (grid) {
+        this._finishChunkLoad(p.mx, p.my, p.key, grid);
+        console.log(`[load] gen2 (${p.mx},${p.my}) — ${this._loadQueue.length} queued`);
+      }
       didWork = true;
     } else if (this._loadQueue.length > 0) {
       const item = this._loadQueue.shift();
@@ -110,6 +113,7 @@ export class MicroWorld {
         _endLoad?.();
         if (partial) {
           this._pendingPhase2 = { partial, mx: item.mx, my: item.my, key: item.key };
+          console.log(`[load] gen1 (${item.mx},${item.my}) — ${this._loadQueue.length} queued`);
         }
         didWork = true;
       }
@@ -127,7 +131,10 @@ export class MicroWorld {
       if (done) {
         this._activeSlices.shift();
         const entry = this._chunks.get(slice.key);
-        if (entry) entry.group.visible = true;
+        if (entry) {
+          entry.group.visible = true;
+          console.log(`[load] rendered (${entry.mx},${entry.my}) — ${this._rerenderQueue.length} rerender, ${this._activeSlices.length} slicing`);
+        }
       }
       didWork = true;
     }
@@ -238,30 +245,35 @@ export class MicroWorld {
     // 2. Unload ALL existing chunks — clean slate
     for (const key of [...this._chunks.keys()]) this._unloadChunk(key);
 
-    // 3. Generate + render ONLY the centre chunk (~12ms total)
+    // 3. Generate + render ONLY the centre chunk
+    const t0 = performance.now();
     this._loadChunk(this._mx, this._my, true);
     const centre = this._centreChunk;
     if (centre) {
       centre.group.position.set(0, 0, 0);
     }
+    console.log(`[load] centre chunk in ${(performance.now() - t0).toFixed(0)}ms`);
 
-    // 4. Place player with precise rendered elevation — no jump later
+    // 4. Place player with precise rendered elevation
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
       const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
       this._playerState.place(spawn.x, spawn.y, elevFn);
       this._playerView.playSpawnAnim();
       this._playerView.sync(this._playerState);
+      console.log(`[load] player placed at (${spawn.x}, ${spawn.y})`);
     }
 
-    // 5. Defer the remaining 24 chunks — generate + render via the normal
-    //    per-frame load queue so the player is on screen immediately.
-    for (let dy = -2; dy <= 2; dy++)
-      for (let dx = -2; dx <= 2; dx++) {
-        if (dx === 0 && dy === 0) continue; // centre already loaded
-        const cx = this._mx + dx, cy = this._my + dy;
-        if (map.inBounds(cx, cy)) this._enqueueLoad(cx, cy);
-      }
+    // 5. Defer the remaining 24 chunks — inner ring first (closer = visible sooner)
+    let queued = 0;
+    for (let r = 1; r <= 2; r++)
+      for (let dy = -r; dy <= r; dy++)
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) < r && Math.abs(dy) < r) continue;
+          const cx = this._mx + dx, cy = this._my + dy;
+          if (map.inBounds(cx, cy)) { this._enqueueLoad(cx, cy); queued++; }
+        }
+    console.log(`[load] ${queued} chunks queued for deferred loading`);
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
