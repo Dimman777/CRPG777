@@ -522,8 +522,13 @@
       editChunkBtn.style.display = 'block';
       view.goButtonLabel = 'Go Here';
       // World fades in when fully loaded — onReady fires after all chunks are rendered.
-      window._game.onReady = () => fadeFromBlack();
+      console.log('[enterGame] setting onReady, calling start...');
+      window._game.onReady = () => {
+        console.log('[enterGame] onReady fired, fading in');
+        fadeFromBlack();
+      };
       window._game.start({ ...opts, chunkOverrides: overrides });
+      console.log('[enterGame] start() returned, onReady should have fired');
     }
 
     editChunkBtn.addEventListener('click', () => {
