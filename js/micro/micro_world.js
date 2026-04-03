@@ -79,30 +79,7 @@ export class MicroWorld {
     // 3 more cover in-flight load-queue items.
     this._initPool(28);
 
-    // Load the full 5×5 synchronously on first init so there's zero background
-    // work during the first few seconds of gameplay (eliminates startup jitter).
-    // ~80ms one-time cost, but the player won't notice since the start screen is
-    // still visible.  _syncChunkPool positions groups and finds nothing to defer.
-    const map = this._macroMap;
-    // Generate all grids first WITHOUT rendering (renderNow=false), then
-    // re-render all at once with full neighbour context.  This avoids NaN
-    // bounding-sphere warnings from chunks rendered before their neighbours exist.
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const cx = this._mx + dx, cy = this._my + dy;
-        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
-      }
-    }
-    this._syncChunkPool();
-    this._rerenderAllWithNeighbors();
-    const centre = this._centreChunk;
-    if (centre) {
-      const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
-      this._playerState.place(spawn.x, spawn.y, elevFn);
-      this._playerView.sync(this._playerState);
-    }
-
+    this._loadAndPlacePlayer();
     this._dispatchCellChange();
   }
 
@@ -239,23 +216,24 @@ export class MicroWorld {
   teleportTo(mx, my) {
     if (!this._playerState) return;
     const map = this._macroMap;
-    mx = Math.max(0, Math.min(map.width  - 1, mx));
-    my = Math.max(0, Math.min(map.height - 1, my));
-    this._mx = mx;
-    this._my = my;
-    // Sync first to unload old chunks and free pool slots before loading new ones.
-    this._syncChunkPool();
-    // Load full 5×5 synchronously — same as init. The ~80ms cost is hidden
-    // behind the fade transition. Prevents blue sky and late-popping objects.
-    const m = this._macroMap;
+    this._mx = Math.max(0, Math.min(map.width  - 1, mx));
+    this._my = Math.max(0, Math.min(map.height - 1, my));
+    this._loadAndPlacePlayer();
+    this._dispatchCellChange();
+  }
+
+  // Shared init/teleport sequence: unload stale chunks, load full 5×5,
+  // re-render with neighbors, and place the player on a passable tile.
+  _loadAndPlacePlayer() {
+    this._syncChunkPool();             // unloads chunks outside the new 5×5 window
+    const map = this._macroMap;
     for (let dy = -2; dy <= 2; dy++)
       for (let dx = -2; dx <= 2; dx++) {
-        const cx = mx + dx, cy = my + dy;
-        if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
           this._loadChunk(cx, cy, false);
       }
     this._rerenderAllWithNeighbors();
-    this._dispatchCellChange();
     const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
