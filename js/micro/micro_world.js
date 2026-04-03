@@ -226,7 +226,6 @@ export class MicroWorld {
   // re-render with neighbors, and place the player on a passable tile.
   _loadAndPlacePlayer() {
     const map = this._macroMap;
-    const R   = 2;
 
     // 1. Flush all deferred work from any prior state
     this._loadQueue.length = 0;
@@ -239,33 +238,14 @@ export class MicroWorld {
     // 2. Unload ALL existing chunks — clean slate
     for (const key of [...this._chunks.keys()]) this._unloadChunk(key);
 
-    // 3. Generate the full 5×5 (no rendering yet)
-    for (let dy = -R; dy <= R; dy++)
-      for (let dx = -R; dx <= R; dx++) {
-        const cx = this._mx + dx, cy = this._my + dy;
-        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
-      }
-
-    // 4. Position all groups relative to centre
-    for (const entry of this._chunks.values()) {
-      entry.group.position.set(
-        (entry.mx - this._mx) * CHUNK_SIZE,
-        0,
-        (entry.my - this._my) * CHUNK_SIZE,
-      );
-    }
-
-    // 5. Render JUST the centre chunk synchronously for precise player elevation.
-    //    This is fast (~7ms for 1 chunk) and prevents the player jumping when
-    //    the full render completes later.
+    // 3. Generate + render ONLY the centre chunk (~12ms total)
+    this._loadChunk(this._mx, this._my, true);
     const centre = this._centreChunk;
     if (centre) {
-      const cx = this._mx, cy = this._my;
-      centre.renderer.render(centre.grid, this._collectNeighbors(cx, cy));
-      centre.group.visible = true;
+      centre.group.position.set(0, 0, 0);
     }
 
-    // 6. Place player with precise rendered elevation — no jump later.
+    // 4. Place player with precise rendered elevation — no jump later
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
       const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
@@ -274,12 +254,14 @@ export class MicroWorld {
       this._playerView.sync(this._playerState);
     }
 
-    // 7. Defer the remaining 24 chunk renders via setTimeout so the browser
-    //    can paint the player + centre chunk before the heavy work.
-    setTimeout(() => {
-      this._rerenderAllWithNeighbors();
-      if (this.onReady) this.onReady();
-    }, 0);
+    // 5. Defer the remaining 24 chunks — generate + render via the normal
+    //    per-frame load queue so the player is on screen immediately.
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        if (dx === 0 && dy === 0) continue; // centre already loaded
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) this._enqueueLoad(cx, cy);
+      }
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
