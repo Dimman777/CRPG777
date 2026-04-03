@@ -114,12 +114,13 @@ Task tracking, prioritization, and file-split scheduling live in **GitHub Issues
 | File | Size | Status | Notes |
 |------|------|--------|-------|
 | `scene_setup.js` | — | ✅ Done | |
-| `rendering.js` | — | ✅ Done | |
+| `rendering.js` | — | ✅ Done | Needs `mixer.update(dt)` when models land — [#30](https://github.com/Dimman777/CRPG777/issues/30) |
 | `camera_controller.js` | — | ✅ Done | |
 | `chunk_renderer.js` | 37kb | ✅ Done | Split tracked: [#24](https://github.com/Dimman777/CRPG777/issues/24) |
 | `grid_visuals.js` | — | ✅ Done | |
-| `actor_visuals.js` | — | ✅ Done | |
-| `follower_visuals.js` | — | ✅ Done | |
+| `actor_visuals.js` | — | ✅ Done | Geometric placeholder — model swap: [#30](https://github.com/Dimman777/CRPG777/issues/30) |
+| `follower_visuals.js` | — | ✅ Done | Octagonal prism placeholder — model swap: [#30](https://github.com/Dimman777/CRPG777/issues/30) |
+| `asset_loader.js` | — | ❌ Not present | GLTFLoader + preload cache — needed for [#30](https://github.com/Dimman777/CRPG777/issues/30) |
 
 ### UI (`js/ui/`)
 
@@ -196,6 +197,17 @@ All 15 original priority modules are implemented. Project is now in the **depth-
 | Bitmap world loading | ✅ Done |
 | Procedural fallback | ✅ Done |
 | Terrain / elevation / rivers | ✅ Done |
+
+### Asset / Model Pipeline
+
+| Item | Status | Notes |
+|------|--------|-------|
+| Geometric placeholder actors | ✅ In use | BoxGeometry in `actor_visuals.js` |
+| Geometric placeholder followers | ✅ In use | Octagonal prism in `follower_visuals.js` |
+| `asset_loader.js` (GLTFLoader + preload cache) | ❌ Not started | [#30](https://github.com/Dimman777/CRPG777/issues/30) |
+| glTF/GLB character models | ❌ No assets yet | Coordinate with asset creation |
+| AnimationMixer (skeletal animation) | ❌ Not started | One-line hook in `rendering.js` — [#30](https://github.com/Dimman777/CRPG777/issues/30) |
+| Asset folder convention (`assets/models/`) | ❌ Not established | [#30](https://github.com/Dimman777/CRPG777/issues/30) |
 
 ---
 
