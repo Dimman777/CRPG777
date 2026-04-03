@@ -16,6 +16,7 @@ export class CameraController {
     this._currentAz    = AZIMUTH_SNAPS[0];
     this._targetAz     = AZIMUTH_SNAPS[0];
     this.target        = new THREE.Vector3(0, 0, 0);
+    this._smoothY      = 0;   // smoothed camera Y — lerped toward target.y
 
     const h = FRUSTUM_HALF, a = this._aspect;
     this._camera = new THREE.OrthographicCamera(
@@ -43,6 +44,9 @@ export class CameraController {
     this.target.set(x, y, z);
   }
 
+  // Snap smoothY to the current target (use on teleport / init to avoid drift).
+  snapY() { this._smoothY = this.target.y; }
+
   // Zoom the orthographic viewport.  Default is FRUSTUM_HALF (20).
   // Smaller values zoom in; larger values zoom out.
   setFrustumHalf(h) {
@@ -64,6 +68,17 @@ export class CameraController {
     } else {
       this._currentAz += Math.sign(diff) * Math.min(Math.abs(diff), ROTATE_SPEED * dt);
     }
+
+    // Smooth vertical tracking — exponential chase toward target.y so micro-tile
+    // elevation changes don't jitter the camera.  Using 1-exp(-k*dt) gives
+    // frame-rate-independent smoothing.  k=16 closes ~93% of the gap in 1/6s.
+    const yDiff = this.target.y - this._smoothY;
+    if (Math.abs(yDiff) < 0.005) {
+      this._smoothY = this.target.y;
+    } else {
+      this._smoothY += yDiff * (1 - Math.exp(-16 * dt));
+    }
+
     this._updatePosition();
   }
 
@@ -83,11 +98,12 @@ export class CameraController {
     const horiz = CAMERA_DIST * Math.cos(elRad);
     const vert  = CAMERA_DIST * Math.sin(elRad);
 
+    const lookY = this._smoothY;
     this._camera.position.set(
       this.target.x + Math.sin(azRad) * horiz,
-      this.target.y + vert,
+      lookY + vert,
       this.target.z + Math.cos(azRad) * horiz
     );
-    this._camera.lookAt(this.target);
+    this._camera.lookAt(this.target.x, lookY, this.target.z);
   }
 }

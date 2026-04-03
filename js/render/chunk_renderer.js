@@ -59,6 +59,20 @@ const OBS_COLOR = [
 ];
 
 // ----------------------------------------------------------------
+// Module-level obstacle geometry + material pool — created once, shared by all
+// ChunkRenderers.  Eliminates per-render dispose/recreate churn that causes
+// periodic GC pauses and GPU object thrash.
+// ----------------------------------------------------------------
+const _OBS_GEO_POOL = [];
+const _OBS_MAT_POOL = [];
+for (let i = 0; i < OBS_GEO.length; i++) {
+  if (!OBS_GEO[i]) { _OBS_GEO_POOL.push(null); _OBS_MAT_POOL.push(null); continue; }
+  const [sw, sh, sd] = OBS_GEO[i];
+  _OBS_GEO_POOL.push(new THREE.BoxGeometry(sw, sh, sd));
+  _OBS_MAT_POOL.push(new THREE.MeshLambertMaterial({ color: OBS_COLOR[i] }));
+}
+
+// ----------------------------------------------------------------
 // Module-level geometry sizing constants
 // ----------------------------------------------------------------
 const _S    = CHUNK_SIZE;   // 64
@@ -179,19 +193,79 @@ export class ChunkRenderer {
     this._gridMesh.visible = false;
     this._gridVisible = false;
     scene.add(this._gridMesh);
+
+    // ── Pre-allocated per-tile scratch buffers (reused across render calls) ──
+    this._H        = new Float32Array(_M * _M);
+    this._COL      = new Float32Array(_M * _M * 3);
+    this._tileElevBuf = new Float32Array(_S * _S);
+
+    // ── Incremental render state — allows _buildFloor to run in row slices ──
+    this._pendingGrid    = null;   // grid being incrementally rendered
+    this._pendingNbr     = null;   // nbrGrids for pending render
+    this._pendingFvi     = 0;      // floor vertex write cursor
+    this._pendingWvi     = 0;      // wall vertex write cursor
+    this._pendingRowStart = 0;     // next row to process
   }
 
-  // Update geometry in-place; only obstacle meshes are recreated.
+  // Optional perf hook — set externally for sub-operation timing.
+  perfBegin = null;
+
+  // Full render in one call (used for centre chunk on init/teleport).
   render(grid, nbrGrids = {}) {
     this._disposeObstacles();
-    // Restore visibility in case this renderer was previously released to pool.
     this._floorMesh.visible = true;
     this._wallMesh.visible  = true;
     this._gridMesh.visible  = this._gridVisible;
     this._grid = grid;
-    this._buildFloor(grid, nbrGrids);
-    this._buildGrid(grid);
-    this._buildObstacles(grid);
+    this._pendingGrid = null; // cancel any in-progress incremental render
+    const _pb = this.perfBegin;
+    const _ef = _pb?.('floor'); this._buildFloor(grid, nbrGrids, 0, _S, 0, 0); _ef?.();
+    this._finishFloor();
+    const _eg = _pb?.('grid');  this._buildGrid(grid);                          _eg?.();
+    const _eo = _pb?.('obstacles'); this._buildObstacles(grid);                 _eo?.();
+  }
+
+  // Start an incremental render — call renderSlice() on subsequent frames.
+  // Returns true when the render is fully complete.
+  beginIncremental(grid, nbrGrids = {}) {
+    this._disposeObstacles();
+    this._grid = grid;
+    this._pendingGrid     = grid;
+    this._pendingNbr      = nbrGrids;
+    this._pendingFvi      = 0;
+    this._pendingWvi      = 0;
+    this._pendingRowStart = 0;
+  }
+
+  // Process the next slice of rows. Returns true when done.
+  renderSlice(rowBudget = 32) {
+    if (!this._pendingGrid) return true;
+    const grid    = this._pendingGrid;
+    const nbrGrids = this._pendingNbr;
+    const rowStart = this._pendingRowStart;
+    const rowEnd   = Math.min(_S, rowStart + rowBudget);
+
+    const _pb = this.perfBegin;
+    const _ef = _pb?.('floor');
+    const result = this._buildFloor(grid, nbrGrids, rowStart, rowEnd,
+                                     this._pendingFvi, this._pendingWvi);
+    _ef?.();
+    this._pendingFvi      = result.fvi;
+    this._pendingWvi      = result.wvi;
+    this._pendingRowStart = rowEnd;
+
+    if (rowEnd >= _S) {
+      // Floor complete — finalize and build grid + obstacles
+      this._floorMesh.visible = true;
+      this._wallMesh.visible  = true;
+      this._gridMesh.visible  = this._gridVisible;
+      this._finishFloor();
+      const _eg = _pb?.('grid');  this._buildGrid(grid);       _eg?.();
+      const _eo = _pb?.('obstacles'); this._buildObstacles(grid); _eo?.();
+      this._pendingGrid = null;
+      return true;
+    }
+    return false;
   }
 
   // Return this renderer to the MicroWorld pool without disposing its geometry.
@@ -201,8 +275,9 @@ export class ChunkRenderer {
     this._floorMesh.visible = false;
     this._wallMesh.visible  = false;
     this._gridMesh.visible  = false;
-    this._grid     = null;
-    this._tileElev = null;
+    this._grid        = null;
+    this._tileElev    = null;
+    this._pendingGrid = null; // cancel any in-progress incremental render
   }
 
   elevationAt(tx, ty) {
@@ -240,8 +315,9 @@ export class ChunkRenderer {
   _disposeObstacles() {
     for (const m of this._obsMeshes) {
       this._scene.remove(m);
-      m.geometry?.dispose();
-      m.material?.dispose();
+      // Geometry and material are shared module-level pools — do NOT dispose them.
+      // Only dispose the instance matrix buffer unique to this InstancedMesh.
+      m.dispose();
     }
     this._obsMeshes = [];
   }
@@ -249,7 +325,7 @@ export class ChunkRenderer {
   // ----------------------------------------------------------------
   // Floor — 8×8 dithered micro-tile grid per tile.
   // ----------------------------------------------------------------
-  _buildFloor(grid, nbrGrids = {}) {
+  _buildFloor(grid, nbrGrids = {}, rowStart = 0, rowEnd = _S, startFvi = 0, startWvi = 0) {
     const S     = _S;
     const ES    = ELEVATION_SCALE;
     const M     = _M;
@@ -261,6 +337,12 @@ export class ChunkRenderer {
     const cl = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
     const elevOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.elevation[ty * S + tx];
+      // Diagonal corners — must check before cardinal edges to avoid OOB indexing
+      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].elevation[(S-1) * S + (S-1)];
+      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].elevation[(S-1) * S];
+      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].elevation[S-1];
+      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].elevation[0];
+      // Cardinal edges
       if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].elevation[ty * S + (S-1)];
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].elevation[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].elevation[(S-1) * S + tx];
@@ -269,6 +351,12 @@ export class ChunkRenderer {
     };
     const groundOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.ground[ty * S + tx];
+      // Diagonal corners
+      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].ground[(S-1) * S + (S-1)];
+      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].ground[(S-1) * S];
+      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].ground[S-1];
+      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].ground[0];
+      // Cardinal edges
       if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].ground[ty * S + (S-1)];
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].ground[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].ground[(S-1) * S + tx];
@@ -325,10 +413,10 @@ export class ChunkRenderer {
     const fPos = this._fPos;
     const fCol = this._fCol;
     const fNrm = this._fNrm;
-    let fvi = 0;
+    let fvi = startFvi;
 
     const wPos = this._wPos, wCol = this._wCol, wNrm = this._wNrm;
-    let wvi = 0;
+    let wvi = startWvi;
     // Wall normals: perpendicular to the wall's XZ direction.
     // For axis-aligned micro-tile walls:  len = MF always.
     //   EW wall (dx=0, dz=MF): nx = dz/MF = 1, nz = 0
@@ -353,13 +441,13 @@ export class ChunkRenderer {
       wvi += 4;
     };
 
-    // Per-tile scratch (tiny — no meaningful allocation cost)
-    const H   = new Float32Array(M * M);
-    const COL = new Float32Array(M * M * 3);
-    const tileElev = new Float32Array(S * S);
+    // Per-tile scratch — pre-allocated on the instance, zero-filled each render
+    const H   = this._H;
+    const COL = this._COL;
+    const tileElev = this._tileElevBuf;
 
-    // ── Main tile loop ───────────────────────────────────────────────────
-    for (let ty = 0; ty < S; ty++) {
+    // ── Main tile loop (may process a subset of rows for incremental rendering) ──
+    for (let ty = rowStart; ty < rowEnd; ty++) {
       for (let tx = 0; tx < S; tx++) {
         const i  = ty * S + tx;
         const eC = elevOf(tx, ty), gC = groundOf(tx, ty);
@@ -574,11 +662,17 @@ export class ChunkRenderer {
     }
 
     this._tileElev = tileElev;
+    this._lastWvi  = wvi;
+    return { fvi, wvi };
+  }
 
-    // ── Mark attributes dirty for re-upload to existing GPU buffers ──────
+  // Mark GPU buffers dirty and set wall draw range. Called once after all
+  // rows have been processed (either single-shot or after final slice).
+  _finishFloor() {
     this._floorPosAttr.needsUpdate = true;
     this._floorColAttr.needsUpdate = true;
     this._floorNrmAttr.needsUpdate = true;
+    const wvi = this._lastWvi ?? 0;
     if (wvi > 0) {
       this._wallPosAttr.needsUpdate = true;
       this._wallColAttr.needsUpdate = true;
@@ -655,9 +749,9 @@ export class ChunkRenderer {
     for (let obsType = 1; obsType < OBS_GEO.length; obsType++) {
       const list = buckets[obsType];
       if (!list.length || !OBS_GEO[obsType]) continue;
-      const [sw, sh, sd] = OBS_GEO[obsType];
-      const geo  = new THREE.BoxGeometry(sw, sh, sd);
-      const mat  = new THREE.MeshLambertMaterial({ color: OBS_COLOR[obsType] });
+      const geo  = _OBS_GEO_POOL[obsType];
+      const mat  = _OBS_MAT_POOL[obsType];
+      const sh   = OBS_GEO[obsType][1]; // height — needed for Y offset
       const mesh = new THREE.InstancedMesh(geo, mat, list.length);
       mesh.castShadow = true;
       const isStamp = STAMP2X2_IDS.has(obsType);
