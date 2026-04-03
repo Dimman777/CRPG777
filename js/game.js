@@ -37,6 +37,7 @@ const MACRO_INTERVAL       = 2000;
 const PLAYER_FACTION       = 'a';
 const PLAYER_COMBATANT_ID  = 'a0';
 const COMBAT_REGION        = 'r1';
+const MAX_COMMITMENT       = 5;
 const START_MANPOWER       = 8;
 
 const ROSTER = {
