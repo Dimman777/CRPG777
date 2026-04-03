@@ -476,9 +476,17 @@ export class MicroWorld {
       );
     }
     this._queueRerender(key);
+    // Queue rerenders for neighbors that aren't already visible.
+    // Visible chunks (e.g. centre) don't need repeated sync-rerenders every
+    // time a new neighbor loads — they'll get one final re-render via the
+    // normal gameplay rerender path when the player next crosses a boundary.
     for (let ddy = -1; ddy <= 1; ddy++)
-      for (let ddx = -1; ddx <= 1; ddx++)
-        if (ddx || ddy) this._queueRerender(`${mx+ddx},${my+ddy}`);
+      for (let ddx = -1; ddx <= 1; ddx++) {
+        if (!ddx && !ddy) continue;
+        const nbrKey = `${mx+ddx},${my+ddy}`;
+        const nbr = this._chunks.get(nbrKey);
+        if (nbr && !nbr.group.visible) this._queueRerender(nbrKey);
+      }
   }
 
   // Full synchronous load — used for centre chunk on init/teleport.
