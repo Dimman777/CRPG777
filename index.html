@@ -700,14 +700,16 @@
 
     // ── In-game World Map button ─────────────────────────────────────────────
 
-    mapPreviewBtn.addEventListener('click', () => {
+    mapPreviewBtn.addEventListener('click', async () => {
+      if (!preGame) await fadeToBlack();
       overlay.classList.add('visible');
       if (window._playerCell) view.setPlayerCell(window._playerCell.mx, window._playerCell.my);
       if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
       startFlash();
+      if (!preGame) fadeFromBlack();
     });
 
-    document.getElementById('map-close-btn').addEventListener('click', () => {
+    document.getElementById('map-close-btn').addEventListener('click', async () => {
       if (preGame) {
         // Return to start screen
         overlay.classList.remove('visible');
@@ -716,8 +718,10 @@
         startChoices.style.display = 'flex';
         presetPanel.style.display = 'none';
       } else {
+        await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
+        requestAnimationFrame(() => requestAnimationFrame(() => fadeFromBlack()));
       }
     });
 
