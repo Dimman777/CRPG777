@@ -367,7 +367,7 @@
   <div id="screen-fade" style="
     position:fixed; inset:0; z-index:9999;
     background:#000; opacity:1;
-    transition: opacity 0.4s ease-in-out;
+    transition: opacity 0.2s ease-in-out;
     pointer-events:none;
   "></div>
 
@@ -403,7 +403,7 @@
       return new Promise(resolve => {
         screenFade.style.opacity = '1';
         screenFade.style.pointerEvents = 'all';
-        setTimeout(resolve, 400);
+        setTimeout(resolve, 200);
       });
     }
     function fadeFromBlack() {
@@ -522,13 +522,11 @@
       editChunkBtn.style.display = 'block';
       view.goButtonLabel = 'Go Here';
       // World fades in when fully loaded — onReady fires after all chunks are rendered.
-      console.log('[enterGame] setting onReady, calling start...');
-      window._game.onReady = () => {
-        console.log('[enterGame] onReady fired, fading in');
-        fadeFromBlack();
-      };
       window._game.start({ ...opts, chunkOverrides: overrides });
-      console.log('[enterGame] start() returned, onReady should have fired');
+      // Player is placed synchronously, chunks render via setTimeout(0).
+      // Start fading in immediately — player appears on dark bg, terrain
+      // fills in during the 200ms fade as chunks render behind it.
+      fadeFromBlack();
     }
 
     editChunkBtn.addEventListener('click', () => {
@@ -549,8 +547,8 @@
         await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
-        window._game.onReady = () => fadeFromBlack();
         window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
+        fadeFromBlack();
       } else {
         // Pre-game: show hero select before starting the adventure
         const seed   = parseInt(document.getElementById('map-seed-input').value) || 42;

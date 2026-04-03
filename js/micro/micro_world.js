@@ -255,31 +255,33 @@ export class MicroWorld {
       );
     }
 
-    // 5. Place player on a passable tile using raw grid elevation (before render).
-    //    This lets the player mesh appear immediately while chunks render.
+    // 5. Place player on a passable tile using raw grid elevation
     const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      // Use raw grid elevation since tileElev isn't populated until render.
       const rawElev = centre.grid.elevation[spawn.y * CHUNK_SIZE + spawn.x] * ELEVATION_SCALE;
       this._playerState.px = spawn.x + 0.5;
       this._playerState.py = spawn.y + 0.5;
-      this._playerState.worldY = rawElev + 1.0; // approximate centre height
+      this._playerState.worldY = rawElev + 1.0;
       this._playerView.sync(this._playerState);
     }
 
-    // 6. Render all at once with full neighbor context
-    this._rerenderAllWithNeighbors();
+    // 6. Start fading in NOW — player is visible, world loads behind the fade.
+    //    Use a short timeout to yield to the browser so the player mesh paints
+    //    before the heavy chunk render blocks the main thread.
+    setTimeout(() => {
+      this._rerenderAllWithNeighbors();
 
-    // 7. Snap player to precise rendered elevation
-    if (centre) {
-      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
-      this._playerState.refreshElevation(elevFn);
-      this._playerView.sync(this._playerState);
-    }
+      // Snap player to precise rendered elevation
+      if (centre) {
+        const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
+        this._playerState.refreshElevation(elevFn);
+        this._playerView.sync(this._playerState);
+      }
 
-    // Signal that the world is fully loaded and rendered
-    if (this.onReady) this.onReady();
+      // Signal that the world is fully loaded and rendered
+      if (this.onReady) this.onReady();
+    }, 0);
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
