@@ -521,12 +521,9 @@
       mapPreviewBtn.style.display = 'block';
       editChunkBtn.style.display = 'block';
       view.goButtonLabel = 'Go Here';
-      // Fade reveals when the world is fully loaded — not on a timer.
-      window._game.onReady = () => requestAnimationFrame(() => fadeFromBlack());
-      // Defer the heavy load so the fade-to-black completes visually first.
-      requestAnimationFrame(() => {
-        window._game.start({ ...opts, chunkOverrides: overrides });
-      });
+      // World fades in when fully loaded — onReady fires after all chunks are rendered.
+      window._game.onReady = () => fadeFromBlack();
+      window._game.start({ ...opts, chunkOverrides: overrides });
     }
 
     editChunkBtn.addEventListener('click', () => {
@@ -547,10 +544,8 @@
         await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
-        window._game.onReady = () => requestAnimationFrame(() => fadeFromBlack());
-        requestAnimationFrame(() => {
-          window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
-        });
+        window._game.onReady = () => fadeFromBlack();
+        window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
       } else {
         // Pre-game: show hero select before starting the adventure
         const seed   = parseInt(document.getElementById('map-seed-input').value) || 42;
