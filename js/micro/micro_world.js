@@ -52,6 +52,10 @@ export class MicroWorld {
     this._loadQueueSet = new Set();
     this._pendingPhase2 = null; // deferred phase2 generation from previous frame
 
+    // Deferred visibility — chunks rendered in the background stay hidden until
+    // all deferred work completes, then become visible in one batch (no pop-in).
+    this._deferredReady = [];
+
     // getTileInfo() cache — avoids per-frame object allocation when standing still
     this._lastTileX     = -1;
     this._lastTileY     = -1;
@@ -132,8 +136,15 @@ export class MicroWorld {
         this._activeSlices.shift();
         const entry = this._chunks.get(slice.key);
         if (entry) {
-          entry.group.visible = true;
+          // Don't pop visible yet — batch all deferred chunks together
+          this._deferredReady.push(entry);
           console.log(`[load] rendered (${entry.mx},${entry.my}) — ${this._rerenderQueue.length} rerender, ${this._activeSlices.length} slicing`);
+        }
+        // When all deferred work is done, make everything visible at once
+        if (this._activeSlices.length === 0 && this._rerenderQueue.length === 0 && this._loadQueue.length === 0 && !this._pendingPhase2) {
+          for (const e of this._deferredReady) e.group.visible = true;
+          console.log(`[load] all ${this._deferredReady.length} deferred chunks visible`);
+          this._deferredReady = [];
         }
       }
       didWork = true;
