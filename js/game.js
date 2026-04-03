@@ -112,16 +112,18 @@ export class Game {
     this.rendering.cameraController = this.cameraController;
     this.rendering.start();
 
-    window.addEventListener('resize', () => {
+    // Store listener references for cleanup on restart/destroy.
+    this._onResize = () => {
       const w = viewport.clientWidth, h = viewport.clientHeight;
       this.scene.onResize(w, h);
       this.cameraController.onResize(w, h);
-    });
-
-    window.addEventListener('keydown', e => {
+    };
+    this._onCameraKey = e => {
       if (e.key === 'q' || e.key === 'Q') this.cameraController.rotateLeft();
       if (e.key === 'e' || e.key === 'E') this.cameraController.rotateRight();
-    });
+    };
+    window.addEventListener('resize', this._onResize);
+    window.addEventListener('keydown', this._onCameraKey);
 
     this._perf = new PerfOverlay();
     this.started = true;

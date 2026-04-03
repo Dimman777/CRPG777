@@ -108,9 +108,8 @@ export class MacroMapView {
 
     canvas.style.cursor = 'crosshair';
     canvas.addEventListener('click', e => this._onCanvasClick(e));
-    document.addEventListener('keydown', e => {
-      if (e.key === 'Escape') this._hideCard();
-    });
+    this._onEscape = e => { if (e.key === 'Escape') this._hideCard(); };
+    document.addEventListener('keydown', this._onEscape);
   }
 
   setScale(s) { this._scale = s; }
@@ -134,9 +133,10 @@ export class MacroMapView {
     this._canvas.height = map.height * s;
     const ctx = this._ctx;
 
-    // 1 — Terrain base
+    // 1 — Terrain base (cache color per cell since terrain/moisture/veg are immutable)
     map.forEach((cell, x, y) => {
-      ctx.fillStyle = cellColor(cell);
+      if (!cell._cachedColor) cell._cachedColor = cellColor(cell);
+      ctx.fillStyle = cell._cachedColor;
       ctx.fillRect(x*s, y*s, s, s);
     });
 
