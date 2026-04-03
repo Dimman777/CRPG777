@@ -84,10 +84,13 @@ export class MicroWorld {
     // ~80ms one-time cost, but the player won't notice since the start screen is
     // still visible.  _syncChunkPool positions groups and finds nothing to defer.
     const map = this._macroMap;
+    // Generate all grids first WITHOUT rendering (renderNow=false), then
+    // re-render all at once with full neighbour context.  This avoids NaN
+    // bounding-sphere warnings from chunks rendered before their neighbours exist.
     for (let dy = -2; dy <= 2; dy++) {
       for (let dx = -2; dx <= 2; dx++) {
         const cx = this._mx + dx, cy = this._my + dy;
-        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy);
+        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
       }
     }
     this._syncChunkPool();
@@ -246,7 +249,7 @@ export class MicroWorld {
       for (let dx = -1; dx <= 1; dx++) {
         const cx = mx + dx, cy = my + dy;
         if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
-          this._loadChunk(cx, cy);
+          this._loadChunk(cx, cy, false);
       }
     this._syncChunkPool();
     this._rerenderAllWithNeighbors();
@@ -538,7 +541,10 @@ export class MicroWorld {
   _rerenderAllWithNeighbors() {
     this._rerenderQueue = [];
     this._rerenderSet.clear();
-    for (const key of this._chunks.keys()) this._rerenderOne(key);
+    for (const [key, entry] of this._chunks) {
+      this._rerenderOne(key);
+      entry.group.visible = true; // ensure visible after deferred-load init
+    }
   }
 
   // ── ChunkRenderer pool ──────────────────────────────────────────────────────
