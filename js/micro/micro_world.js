@@ -458,7 +458,8 @@ export class MicroWorld {
     if (!entry) return;
     // Cancel any in-progress incremental render for this chunk.
     if (this._activeSlices) {
-      this._activeSlices = this._activeSlices.filter(s => s.key !== key);
+      const idx = this._activeSlices.findIndex(s => s.key === key);
+      if (idx >= 0) this._activeSlices.splice(idx, 1);
     }
     this._releaseRenderer(entry);  // clears obstacles, hides meshes, returns to pool
     this._chunks.delete(key);
@@ -482,9 +483,8 @@ export class MicroWorld {
   _rerenderOne(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
-    const [cx, cy] = key.split(',').map(Number);
     entry.renderer.perfBegin = this.perfBegin;
-    entry.renderer.render(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.render(entry.grid, this._collectNeighbors(entry.mx, entry.my));
     entry.renderer.perfBegin = null;
   }
 
@@ -492,9 +492,8 @@ export class MicroWorld {
   _rerenderIncremental(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
-    const [cx, cy] = key.split(',').map(Number);
     entry.renderer.perfBegin = this.perfBegin;
-    entry.renderer.beginIncremental(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.beginIncremental(entry.grid, this._collectNeighbors(entry.mx, entry.my));
     entry.renderer.perfBegin = null;
     // Track this renderer as having an active incremental render.
     if (!this._activeSlices) this._activeSlices = [];

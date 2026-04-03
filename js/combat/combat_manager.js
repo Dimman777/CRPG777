@@ -34,11 +34,10 @@ export class CombatManager {
   getPlayerOptions() {
     const actor   = this.initiative.current();
     const enemies = this.combatants.filter(c => c.isAlive() && c.factionId !== actor.factionId);
-    return enemies.map(e => ({
-      combatant: e,
-      dist:      this.grid.getDistance(actor.id, e.id),
-      inRange:   this.grid.getDistance(actor.id, e.id) <= MELEE_RANGE,
-    }));
+    return enemies.map(e => {
+      const dist = this.grid.getDistance(actor.id, e.id);
+      return { combatant: e, dist, inRange: dist <= MELEE_RANGE };
+    });
   }
 
   playerAttack(targetId) {
