@@ -42,6 +42,8 @@ function disposeMesh(scene, mesh) {
   }
 }
 
+const SPAWN_ANIM_DUR = 0.3; // seconds for spawn scale-in
+
 export { LEG_H, TORSO_H, HEAD_H, makeOctPrism };
 
 export class PlayerView {
@@ -51,11 +53,31 @@ export class PlayerView {
     this._legMesh   = makeOctPrism(scene, PLAYER_RADIUS, LEG_H,   C);
     this._torsoMesh = makeOctPrism(scene, PLAYER_RADIUS, TORSO_H, C);
     this._headMesh  = makeOctPrism(scene, HEAD_RADIUS,   HEAD_H,  C);
+    this._spawnAnim = 0;  // 0 = no anim, >0 = progress (0→1 over SPAWN_ANIM_DUR)
   }
 
+  // Start a spawn scale-in animation. Call after placing the player.
+  playSpawnAnim() { this._spawnAnim = 0.001; } // tiny nonzero = active
+
   // Sync mesh positions/rotations to the current PlayerState.
-  // Call once per frame after state.update().
-  sync(state) {
+  // Call once per frame after state.update().  dt is optional (needed for spawn anim).
+  sync(state, dt = 0) {
+    // Spawn scale-in animation
+    if (this._spawnAnim > 0 && this._spawnAnim < 1) {
+      this._spawnAnim = Math.min(1, this._spawnAnim + dt / SPAWN_ANIM_DUR);
+      const t = this._spawnAnim;
+      const s = t * t * (3 - 2 * t); // smooth step
+      this._legMesh.scale.setScalar(s);
+      this._torsoMesh.scale.setScalar(s);
+      this._headMesh.scale.setScalar(s);
+    } else if (this._spawnAnim !== 0) {
+      // Ensure scale is exactly 1 after animation
+      this._legMesh.scale.setScalar(1);
+      this._torsoMesh.scale.setScalar(1);
+      this._headMesh.scale.setScalar(1);
+      this._spawnAnim = 0;
+    }
+
     const baseY = state.worldY - (LEG_H + TORSO_H + HEAD_H) / 2;
 
     this._legMesh.position.set(  state.px, baseY + LEG_H * 0.5,                    state.py);

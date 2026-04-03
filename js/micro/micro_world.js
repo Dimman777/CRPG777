@@ -206,7 +206,7 @@ export class MicroWorld {
     // No explicit preload needed — the 5×5 window ensures chunks one ring beyond
     // the visible 3×3 are already loading/loaded via the deferred queue.
 
-    this._playerView.sync(pState);
+    this._playerView.sync(pState, dt);
     const pos = pState.position;
     if (cameraController) cameraController.setTarget(pos.x, pos.y, pos.z);
     return pos;
@@ -255,31 +255,29 @@ export class MicroWorld {
       );
     }
 
-    // 5. Place player on a passable tile using raw grid elevation
+    // 5. Render JUST the centre chunk synchronously for precise player elevation.
+    //    This is fast (~7ms for 1 chunk) and prevents the player jumping when
+    //    the full render completes later.
     const centre = this._centreChunk;
     if (centre) {
+      const cx = this._mx, cy = this._my;
+      centre.renderer.render(centre.grid, this._collectNeighbors(cx, cy));
+      centre.group.visible = true;
+    }
+
+    // 6. Place player with precise rendered elevation — no jump later.
+    if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      const rawElev = centre.grid.elevation[spawn.y * CHUNK_SIZE + spawn.x] * ELEVATION_SCALE;
-      this._playerState.px = spawn.x + 0.5;
-      this._playerState.py = spawn.y + 0.5;
-      this._playerState.worldY = rawElev + 1.0;
+      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
+      this._playerState.place(spawn.x, spawn.y, elevFn);
+      this._playerView.playSpawnAnim();
       this._playerView.sync(this._playerState);
     }
 
-    // 6. Start fading in NOW — player is visible, world loads behind the fade.
-    //    Use a short timeout to yield to the browser so the player mesh paints
-    //    before the heavy chunk render blocks the main thread.
+    // 7. Defer the remaining 24 chunk renders via setTimeout so the browser
+    //    can paint the player + centre chunk before the heavy work.
     setTimeout(() => {
       this._rerenderAllWithNeighbors();
-
-      // Snap player to precise rendered elevation
-      if (centre) {
-        const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
-        this._playerState.refreshElevation(elevFn);
-        this._playerView.sync(this._playerState);
-      }
-
-      // Signal that the world is fully loaded and rendered
       if (this.onReady) this.onReady();
     }, 0);
   }
