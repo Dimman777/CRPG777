@@ -341,7 +341,7 @@ export class Game {
       this.microWorld.perfBegin = (name) => perf.begin(name);
       const endWorld = perf.begin('microWorld');
       this.microWorld.update(dt, this.cameraController);
-      endWorld();
+      endWorld?.();
 
       if (tm.isActive) {
         tm.update(dt);

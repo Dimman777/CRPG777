@@ -160,6 +160,7 @@ export class ChunkRenderer {
       new THREE.MeshLambertMaterial({ vertexColors: true }));
     this._floorMesh.castShadow = this._floorMesh.receiveShadow = true;
     this._floorMesh.frustumCulled = false;
+    this._floorMesh.visible = false; // hidden until first render() populates the buffer
     scene.add(this._floorMesh);
 
     // ── Walls — persistent max-size geometry + drawRange ─────────────────
@@ -180,6 +181,7 @@ export class ChunkRenderer {
       new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     this._wallMesh.castShadow = this._wallMesh.receiveShadow = true;
     this._wallMesh.frustumCulled = false;
+    this._wallMesh.visible = false;
     scene.add(this._wallMesh);
 
     // ── Grid — persistent geometry ───────────────────────────────────────
@@ -344,30 +346,30 @@ export class ChunkRenderer {
     const cl = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
     const elevOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.elevation[ty * S + tx];
-      // Diagonal corners — must check before cardinal edges to avoid OOB indexing
-      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].elevation[(S-1) * S + (S-1)];
-      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].elevation[(S-1) * S];
-      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].elevation[S-1];
-      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].elevation[0];
-      // Cardinal edges
-      if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].elevation[ty * S + (S-1)];
-      if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].elevation[ty * S];
-      if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].elevation[(S-1) * S + tx];
-      if (ty >= S && nbrGrids[ '0,1']) return nbrGrids[ '0,1'].elevation[tx];
+      // Diagonal corners — both coords out of bounds
+      if (tx <  0 && ty <  0) return nbrGrids['-1,-1']?.elevation[(S-1) * S + (S-1)] ?? grid.elevation[0];
+      if (tx >= S && ty <  0) return nbrGrids[ '1,-1']?.elevation[(S-1) * S]          ?? grid.elevation[S-1];
+      if (tx <  0 && ty >= S) return nbrGrids['-1,1']?.elevation[S-1]                 ?? grid.elevation[(S-1)*S];
+      if (tx >= S && ty >= S) return nbrGrids[ '1,1']?.elevation[0]                   ?? grid.elevation[(S-1)*S+(S-1)];
+      // Cardinal edges — only ONE coord is out of bounds
+      if (tx <  0) return nbrGrids['-1,0']?.elevation[ty * S + (S-1)] ?? grid.elevation[ty * S];
+      if (tx >= S) return nbrGrids[ '1,0']?.elevation[ty * S]         ?? grid.elevation[ty * S + (S-1)];
+      if (ty <  0) return nbrGrids['0,-1']?.elevation[(S-1) * S + tx] ?? grid.elevation[tx];
+      if (ty >= S) return nbrGrids[ '0,1']?.elevation[tx]             ?? grid.elevation[(S-1) * S + tx];
       return grid.elevation[cl(ty,0,S-1) * S + cl(tx,0,S-1)] || 0;
     };
     const groundOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.ground[ty * S + tx];
       // Diagonal corners
-      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].ground[(S-1) * S + (S-1)];
-      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].ground[(S-1) * S];
-      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].ground[S-1];
-      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].ground[0];
+      if (tx <  0 && ty <  0) return nbrGrids['-1,-1']?.ground[(S-1) * S + (S-1)] ?? grid.ground[0];
+      if (tx >= S && ty <  0) return nbrGrids[ '1,-1']?.ground[(S-1) * S]          ?? grid.ground[S-1];
+      if (tx <  0 && ty >= S) return nbrGrids['-1,1']?.ground[S-1]                 ?? grid.ground[(S-1)*S];
+      if (tx >= S && ty >= S) return nbrGrids[ '1,1']?.ground[0]                   ?? grid.ground[(S-1)*S+(S-1)];
       // Cardinal edges
-      if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].ground[ty * S + (S-1)];
-      if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].ground[ty * S];
-      if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].ground[(S-1) * S + tx];
-      if (ty >= S && nbrGrids[ '0,1']) return nbrGrids[ '0,1'].ground[tx];
+      if (tx <  0) return nbrGrids['-1,0']?.ground[ty * S + (S-1)] ?? grid.ground[ty * S];
+      if (tx >= S) return nbrGrids[ '1,0']?.ground[ty * S]         ?? grid.ground[ty * S + (S-1)];
+      if (ty <  0) return nbrGrids['0,-1']?.ground[(S-1) * S + tx] ?? grid.ground[tx];
+      if (ty >= S) return nbrGrids[ '0,1']?.ground[tx]             ?? grid.ground[(S-1) * S + tx];
       return grid.ground[cl(ty,0,S-1) * S + cl(tx,0,S-1)] || 0;
     };
 
