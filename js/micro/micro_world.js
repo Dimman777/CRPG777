@@ -244,12 +244,12 @@ export class MicroWorld {
     this._mx = mx;
     this._my = my;
     // Sync first to unload old chunks and free pool slots before loading new ones.
-    // Without this, teleporting far away exhausts the pool (25 old + 9 new > 28).
     this._syncChunkPool();
-    // Load inner 3×3 synchronously so the destination is fully visible.
+    // Load full 5×5 synchronously — same as init. The ~80ms cost is hidden
+    // behind the fade transition. Prevents blue sky and late-popping objects.
     const m = this._macroMap;
-    for (let dy = -1; dy <= 1; dy++)
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
         const cx = mx + dx, cy = my + dy;
         if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
           this._loadChunk(cx, cy, false);
