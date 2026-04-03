@@ -25,9 +25,8 @@ import { FollowerManager } from './micro/follower_manager.js';
 import { FollowerVisuals } from './render/follower_visuals.js';
 import { FormationPanel }  from './ui/formation_panel.js';
 import { CharacterSheet }  from './ui/character_sheet.js';
-import { TurnController }  from './micro/turn_controller.js';
-import { TurnHud }         from './ui/turn_hud.js';
-import { ActionBar }       from './ui/action_bar.js';
+import { ExplorationInput } from './micro/exploration_input.js';
+import { TurnMode }        from './micro/turn_mode.js';
 import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
 import { RNG }             from './core/rng.js';
@@ -78,16 +77,8 @@ export class Game {
     this._followerMgr    = null;
     this._followerVis    = null;
     this._formationPanel = null;
-    this._turnController    = null;
-    this._turnHud           = null;
-    this._actionBar         = null;
-    this._runHighlightMids     = [];   // blue dim — run intermediate tiles (one per target)
-    this._runHighlightDsts     = [];   // blue bright — run destination tiles (one per target)
-    this._runTargets           = [];   // cached getRunTargets() result for click matching
-    this._stopHighlightSudden  = null; // red-orange — current tile (sudden stop)
-    this._stopHighlightGradual = null; // amber — 1 tile forward (gradual stop)
-    this._actionMode           = 'none'; // 'none' | 'move' | 'run' | 'stop'
-    this._facingAtTurnStart    = 0;     // player legAngle at the start of each PLAYER turn
+    this._explorationInput  = null;
+    this._turnMode          = null;
     this._chunkOverrides       = null;  // ChunkOverrides — shared with the macro map editor
     this._sharedWorld          = null;  // { seed, map, worldData } — set in _initExploration
     this._playerCell           = null;  // { mx, my } — updated on cell change events
@@ -256,308 +247,8 @@ export class Game {
       }
     });
 
-    // WASD / Z / C — disabled in turn mode (mouse + buttons used instead); Space — toggle turn
-    window.addEventListener('keydown', e => {
-      const k    = e.key.toLowerCase();
-      const turn = this._turnController?.isActive;
-      if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
-        e.preventDefault();
-        if (!turn) this.microWorld.keyDown(k);
-      }
-      if (!turn) {
-        if (k === 'z') this.microWorld.rotateFacingLeft();
-        if (k === 'c') this.microWorld.rotateFacingRight();
-      }
-      if (k === ' ') { e.preventDefault(); this._toggleTurnMode(); }
-      if (e.key === 'Enter' && turn) {
-        e.preventDefault();
-        const hadMomentum = this._turnController.playerRanLastTurn;
-        this._turnController.pass(this._followerMgr.followers.length);
-        debug(hadMomentum ? '[Turn] Stop — momentum broken.' : '[Turn] Pass.');
-      }
-    });
-    window.addEventListener('keyup', e => {
-      const k = e.key.toLowerCase();
-      if (k === 'w' || k === 'a' || k === 's' || k === 'd') {
-        this.microWorld.keyUp(k); // always clear so keys don't stick on mode switch
-      }
-    });
-
-    // Mouse: right-click hold = free-roam movement; right-click in turn mode = face toward.
-    // Left-click = move to adjacent tile (turn mode only).
-    // _rmouseDown and cursor world pos must be declared here (outside the block)
-    // so the onUpdate closure further below can capture them.
-    let _rmouseDown = false;
-    let _rmouseX = 0, _rmouseZ = 0;
-    {
-      const raycaster    = new THREE.Raycaster();
-      const groundPlane  = new THREE.Plane();
-      const groundNormal = new THREE.Vector3(0, 1, 0);
-      const hitPoint     = new THREE.Vector3();
-      const vpEl         = document.getElementById('game-viewport');
-
-      // Returns world-space XZ position under the mouse (no flooring).
-      const worldPosFromEvent = e => {
-        const rect = vpEl.getBoundingClientRect();
-        const ndcX =  ((e.clientX - rect.left) / rect.width)  * 2 - 1;
-        const ndcY = -((e.clientY - rect.top)  / rect.height) * 2 + 1;
-        raycaster.setFromCamera({ x: ndcX, y: ndcY }, this.cameraController.camera);
-        const cr   = this.microWorld.centreRenderer;
-        const p    = this.microWorld.player;
-        const elev = cr ? cr.elevationAt(p.px, p.py) : 0;
-        groundPlane.set(groundNormal, -elev);
-        if (!raycaster.ray.intersectPlane(groundPlane, hitPoint)) return null;
-        return { x: hitPoint.x, z: hitPoint.z };
-      };
-
-      const tileFromEvent = e => {
-        const pos = worldPosFromEvent(e);
-        return pos ? { tx: Math.floor(pos.x), tz: Math.floor(pos.z) } : null;
-      };
-
-      // ── Follower context menu ─────────────────────────────────────────────────
-      // A small floating div that appears when the player right-clicks near a follower.
-      this._contextMenu = document.createElement('div');
-      this._contextMenu.style.cssText = [
-        'display:none',
-        'position:fixed',
-        'z-index:400',
-        'background:#0e0e18',
-        'border:1px solid #334',
-        'border-radius:3px',
-        'font-family:monospace',
-        'font-size:12px',
-        'color:#ccc',
-        'min-width:160px',
-        'box-shadow:0 4px 16px rgba(0,0,0,0.6)',
-        'overflow:hidden',
-      ].join(';');
-      document.body.appendChild(this._contextMenu);
-
-      const hideContextMenu = () => {
-        this._contextMenu.style.display = 'none';
-      };
-      document.addEventListener('click',     hideContextMenu);
-      document.addEventListener('keydown',   hideContextMenu);
-      vpEl.addEventListener('contextmenu',   hideContextMenu);
-
-      const showContextMenu = (follower, screenX, screenY) => {
-        const char = follower.charData;
-        this._contextMenu.innerHTML = `
-          <div style="padding:8px 12px 6px;border-bottom:1px solid #222">
-            <div style="font-size:13px;color:#e8dcc8">${follower.name}</div>
-            ${char ? `<div style="font-size:10px;color:#556;margin-top:1px">${char.role.toUpperCase()}</div>` : ''}
-          </div>
-          <button id="ctx-sheet"
-            style="display:block;width:100%;padding:7px 12px;text-align:left;
-                   font-family:monospace;font-size:11px;background:transparent;
-                   color:#aab8cc;border:none;cursor:pointer;
-                   border-bottom:1px solid #1a1a28">
-            Character Sheet
-          </button>
-          <button id="ctx-dismiss"
-            style="display:block;width:100%;padding:7px 12px;text-align:left;
-                   font-family:monospace;font-size:11px;background:transparent;
-                   color:#886655;border:none;cursor:pointer">
-            Dismiss
-          </button>`;
-
-        // Position near cursor but keep on-screen
-        const menuW = 170, menuH = 90;
-        let mx = screenX + 4, my = screenY + 4;
-        if (mx + menuW > window.innerWidth)  mx = screenX - menuW - 4;
-        if (my + menuH > window.innerHeight) my = screenY - menuH - 4;
-        this._contextMenu.style.left    = mx + 'px';
-        this._contextMenu.style.top     = my + 'px';
-        this._contextMenu.style.display = 'block';
-
-        this._contextMenu.querySelector('#ctx-sheet')?.addEventListener('click', e => {
-          e.stopPropagation();
-          hideContextMenu();
-          if (char) this._charSheet?.show(char);
-        });
-        this._contextMenu.querySelector('#ctx-dismiss')?.addEventListener('click', e => {
-          e.stopPropagation();
-          hideContextMenu();
-          if (follower.charId) this._formationPanel.setActive(
-            this._followerMgr.followers
-              .map(f => f.charId)
-              .filter(id => id && id !== follower.charId),
-          );
-        });
-      };
-
-      // Hit-test: find the follower closest to the world-space click point.
-      const followerAtPos = pos => {
-        if (!pos) return null;
-        const HIT_R = 0.85;
-        let best = null, bestD = HIT_R;
-        for (const f of this._followerMgr.followers) {
-          const d = Math.hypot(pos.x - f.px, pos.z - f.py);
-          if (d < bestD) { bestD = d; best = f; }
-        }
-        return best;
-      };
-
-      // ── Right-click hold: free-roam mouse movement ───────────────────────────
-      // Direction = player → cursor.  Speed ramps with distance (0.5–5 tiles).
-      // Intercept: if the initial click lands on a follower, show the context menu instead.
-      let _followerHit = null;
-      vpEl.addEventListener('mousedown', e => {
-        if (e.button !== 2) return;
-        if (this._turnController?.isActive) return; // turn mode uses contextmenu
-        e.preventDefault();
-        const pos = worldPosFromEvent(e);
-        _followerHit = followerAtPos(pos);
-        if (_followerHit) return; // context menu shown on mouseup
-        _rmouseDown = true;
-        if (pos) { _rmouseX = pos.x; _rmouseZ = pos.z; }
-      });
-
-      vpEl.addEventListener('mousemove', e => {
-        if (!_rmouseDown) return;
-        const pos = worldPosFromEvent(e);
-        if (pos) { _rmouseX = pos.x; _rmouseZ = pos.z; }
-      });
-
-      vpEl.addEventListener('mouseup', e => {
-        if (e.button !== 2) return;
-        if (_followerHit) {
-          showContextMenu(_followerHit, e.clientX, e.clientY);
-          _followerHit = null;
-          return;
-        }
-        _rmouseDown = false;
-        this.microWorld.player?.clearMouseMove();
-      });
-      vpEl.addEventListener('mouseleave', () => {
-        _followerHit = null;
-        _rmouseDown = false;
-        this.microWorld.player?.clearMouseMove();
-      });
-
-      // Suppress the browser context menu on the viewport in all modes.
-      vpEl.addEventListener('contextmenu', e => e.preventDefault());
-
-      // Right-click — face the player toward the clicked tile (costs no turn action).
-      // Only allowed when Move or Run is selected — prevents infinite free facing changes.
-      // If the rotation would exceed the ±45° Run limit the mode demotes to Move.
-      vpEl.addEventListener('contextmenu', e => {
-        if (!this._turnController?.isActive) return;
-        if (this._turnController.state !== 'player') return;
-        if (this._actionMode !== 'move' && this._actionMode !== 'run') return;
-        e.preventDefault();
-        const hit = tileFromEvent(e);
-        if (!hit) return;
-        const player = this.microWorld.player;
-        const dx   = hit.tx + 0.5 - player.px;
-        const dz   = hit.tz + 0.5 - player.py;
-        const dist = Math.hypot(dx, dz);
-        if (dist < 0.01) return;
-
-        // All rotation limits are cumulative from the turn-start facing so that
-        // facing changes in Run mode count toward the Move ±180° budget and Run
-        // is locked out (disabled, not demoted) once total rotation exceeds ±45°.
-        const target    = Math.atan2(dx / dist, dz / dist);
-        let totalDiff   = ((target - this._facingAtTurnStart + 3 * Math.PI) % (2 * Math.PI)) - Math.PI;
-        const maxRot    = this._actionMode === 'run' ? Math.PI / 4 : Math.PI;
-        totalDiff       = Math.max(-maxRot, Math.min(maxRot, totalDiff));
-        const newAngle  = this._facingAtTurnStart + totalDiff;
-        player.legAngle = newAngle;
-        player.headingX = Math.sin(newAngle);
-        player.headingZ = Math.cos(newAngle);
-        player.refresh(this.microWorld.centreRenderer);
-        this._updateRunHighlight();
-        this._updateStopHighlights();
-        debug(`[Turn] Facing (${hit.tx}, ${hit.tz}).`);
-      });
-
-      // Left-click — execute the selected action on the clicked tile.
-      vpEl.addEventListener('click', e => {
-        const tc = this._turnController;
-        if (!tc?.isActive) return;
-        if (tc.state !== 'player') return;
-        if (this._actionMode === 'none') {
-          debug('[Turn] Select Move or Run first.');
-          return;
-        }
-        const hit = tileFromEvent(e);
-        if (!hit) return;
-
-        if (this._actionMode === 'move' && !tc.playerRanLastTurn) {
-          const player = this.microWorld.player;
-          const diffX  = hit.tx - Math.floor(player.px);
-          const diffZ  = hit.tz - Math.floor(player.py);
-          if (diffX === 0 && diffZ === 0) return;
-          if (Math.abs(diffX) > 1 || Math.abs(diffZ) > 1) {
-            debug('[Turn] Click an adjacent tile to move.');
-            return;
-          }
-          // Preserve facing — the player sidesteps / backs up without pivoting.
-          const savedAngle = player.legAngle;
-          const savedHX    = player.headingX;
-          const savedHZ    = player.headingZ;
-          const moved = tc.playerMove(
-            diffX, diffZ, player,
-            this.microWorld.centreGrid,
-            this.microWorld.centreRenderer,
-            this._followerMgr.followers,
-          );
-          if (moved) {
-            player.legAngle = savedAngle;
-            player.headingX = savedHX;
-            player.headingZ = savedHZ;
-            player.refresh(this.microWorld.centreRenderer);
-          } else {
-            debug('[Turn] Blocked.');
-          }
-
-        } else if (this._actionMode === 'stop') {
-          const player = this.microWorld.player;
-          const diffX  = hit.tx - Math.floor(player.px);
-          const diffZ  = hit.tz - Math.floor(player.py);
-
-          if (diffX === 0 && diffZ === 0) {
-            // Sudden stop — stay on current tile, break momentum immediately
-            tc.pass(this._followerMgr.followers.length);
-            debug('[Turn] Sudden stop.');
-          } else {
-            // Only accept the highlighted gradual-stop tile
-            const gradual = tc.getStopGradualTile(
-              player, this.microWorld.centreGrid, this._followerMgr.followers,
-            );
-            if (!gradual || hit.tx !== gradual.tx || hit.tz !== gradual.tz) {
-              debug('[Turn] Click your tile (sudden) or the highlighted tile (gradual stop).');
-              return;
-            }
-            // Gradual stop — move 1 tile forward; playerMove clears momentum
-            const moved = tc.playerMove(
-              diffX, diffZ, player,
-              this.microWorld.centreGrid,
-              this.microWorld.centreRenderer,
-              this._followerMgr.followers,
-            );
-            if (moved) debug('[Turn] Gradual stop.');
-            else       debug('[Turn] Blocked.');
-          }
-
-        } else if (this._actionMode === 'run') {
-          const target = this._runTargets.find(t => t.tx === hit.tx && t.tz === hit.tz);
-          if (!target) {
-            debug('[Turn] Click a highlighted tile to run.');
-            return;
-          }
-          const ran = tc.playerRunTo(
-            this.microWorld.player,
-            this.microWorld.centreGrid,
-            this.microWorld.centreRenderer,
-            target.tx, target.tz,
-            this._followerMgr.followers,
-          );
-          if (!ran) debug('[Turn] Run blocked.');
-        }
-      });
-    }
+    // Input + turn mode — extracted to dedicated modules
+    const vpEl = document.getElementById('game-viewport');
 
     // Zoom in for ground-level exploration (default FRUSTUM_HALF is 20)
     this.cameraController.setFrustumHalf(8);
@@ -586,233 +277,84 @@ export class Game {
       this._followerMgr.onChunkTransition(dPx, dPy);
     };
 
-    // Turn system
-    this._turnController = new TurnController();
-    this._turnHud        = new TurnHud();
+    // Input + turn mode modules
+    this._explorationInput = new ExplorationInput({
+      viewport:          vpEl,
+      getCamera:         () => this.cameraController.camera,
+      getPlayer:         () => this.microWorld.player,
+      getCentreRenderer: () => this.microWorld.centreRenderer,
+      getFollowers:      () => this._followerMgr.followers,
+      microWorld:        this.microWorld,
+      charSheet:         this._charSheet,
+      formationPanel:    this._formationPanel,
+      onToggleTurn:      () => this._turnMode.toggle(),
+      isTurnActive:      () => this._turnMode?.isActive ?? false,
+      onTurnPass:        () => this._turnMode.pass(),
+      onLog:             msg => debug(msg),
+    });
 
-    // Run-path highlight — two semi-transparent quads (intermediate + destination tile)
-    const mkHighlight = (color, opacity) => {
-      const geo  = new THREE.PlaneGeometry(0.88, 0.88);
-      geo.rotateX(-Math.PI / 2);
-      const mat  = new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false });
-      const mesh = new THREE.Mesh(geo, mat);
-      mesh.renderOrder = 1;
-      mesh.visible     = false;
-      this.scene.scene.add(mesh);
-      return mesh;
-    };
-    // Pool of 5 meshes for intermediate + destination tiles (±45° arc has at most 5 targets)
-    for (let i = 0; i < 5; i++) {
-      this._runHighlightMids.push(mkHighlight(0x44aaff, 0.22)); // blue dim — intermediate
-      this._runHighlightDsts.push(mkHighlight(0x44aaff, 0.45)); // blue bright — destination
-    }
-    this._stopHighlightSudden  = mkHighlight(0xff4422, 0.35); // red-orange — sudden stop (current tile)
-    this._stopHighlightGradual = mkHighlight(0xffaa22, 0.45); // amber — gradual stop (1 tile forward)
-
-    // Action bar — Move / Run buttons select the action; tile-click executes it
-    this._actionBar = new ActionBar();
-    this._actionBar.onMove = () => {
-      if (!this._turnController?.isActive) return;
-      this._actionMode = 'move';
-      this._actionBar.setActive('move');
-      this._updateRunHighlight();
-      this._updateStopHighlights();
-    };
-    this._actionBar.onRun = () => {
-      if (!this._turnController?.isActive) return;
-      this._actionMode = 'run';
-      this._actionBar.setActive('run');
-      this._updateRunHighlight();
-      this._updateStopHighlights();
-    };
-    // Stop enters selection mode: player clicks current tile (sudden) or 1-ahead (gradual)
-    this._actionBar.onStop = () => {
-      if (!this._turnController?.isActive) return;
-      this._actionMode = 'stop';
-      this._actionBar.setActive('stop');
-      this._updateRunHighlight();
-      this._updateStopHighlights();
-    };
-
-    this._turnController.onStateChange = () => {
-      const tc           = this._turnController;
-      const isPlayerTurn = tc.isActive && tc.state === 'player';
-      if (isPlayerTurn) {
-        this._actionMode        = 'none';
-        this._facingAtTurnStart = this.microWorld.player?.legAngle ?? 0;
-        this._actionBar.setActive('none');
-        // Show Move+Run or Run+Stop depending on momentum
-        this._actionBar.setMomentum(tc.playerRanLastTurn);
-      }
-      this._updateRunHighlight();
-      this._updateStopHighlights();
-      this._actionBar.setVisible(isPlayerTurn);
-      this._turnHud.update(tc, this._followerMgr.followers, this._actionMode, tc.playerRanLastTurn);
-      this.microWorld.setGridVisible(tc.isActive);
-    };
-    // Delegate follower movement to FollowerManager so tight/loose logic is used
-    this._turnController.onFollowerTurn = (idx, player, grid) => {
-      return this._followerMgr.advanceOneTurnStep(
-        idx,
-        player.px, player.py,
-        player.headingX, player.headingZ,
-        grid,
-      );
-    };
+    this._turnMode = new TurnMode({
+      scene:              this.scene.scene,
+      viewport:           vpEl,
+      explorationInput:   this._explorationInput,
+      getPlayer:          () => this.microWorld.player,
+      getCentreGrid:      () => this.microWorld.centreGrid,
+      getCentreRenderer:  () => this.microWorld.centreRenderer,
+      getFollowers:       () => this._followerMgr.followers,
+      followerMgr:        this._followerMgr,
+      microWorld:         this.microWorld,
+      onToggleMacro:      (paused) => {
+        if (paused) {
+          clearInterval(this._macroTimer);
+          this._macroTimer = null;
+        } else {
+          this._macroTimer = setInterval(() => {
+            this.macroGame.advanceDay();
+            this.macroPanel.update(this.macroGame);
+            this._flushMacroLog();
+          }, MACRO_INTERVAL);
+        }
+      },
+      onLog: msg => debug(msg),
+    });
 
     // Per-frame update — real-time or turn mode
+    const input = this._explorationInput;
+    const tm    = this._turnMode;
     this.rendering.onUpdate = dt => {
       const perf = this._perf;
       perf.frameStart();
 
       // Apply mouse-driven movement (free roam only).
-      if (_rmouseDown && !this._turnController?.isActive) {
+      if (input.rmouseDown && !tm.isActive) {
         const p = this.microWorld.player;
         if (p) {
-          const dx   = _rmouseX - p.px;
-          const dz   = _rmouseZ - p.py;
+          const dx   = input.rmouseX - p.px;
+          const dz   = input.rmouseZ - p.py;
           const dist = Math.sqrt(dx * dx + dz * dz);
-          // Speed ramps from 0 at 0.5 tiles to full at 5 tiles.
           const speedFactor = dist > 0.5 ? Math.min(1, (dist - 0.5) / 4.5) : 0;
           if (dist > 0.1) p.setMouseMove(dx / dist, dz / dist, speedFactor);
           else            p.clearMouseMove();
         }
       }
 
-      // microWorld.update() is safe in turn mode: all keys are false so the
-      // player won't move, but head-look and terrain-snap still run.
       this.microWorld.perfBegin = (name) => perf.begin(name);
       const endWorld = perf.begin('microWorld');
       this.microWorld.update(dt, this.cameraController);
       endWorld();
 
-      if (this._turnController.isActive) {
-        this._followerMgr.updateIdleOnly(dt);
-        this._turnController.tick(
-          dt,
-          this._followerMgr.followers,
-          this.microWorld.player,
-          this.microWorld.centreGrid,
-          this.microWorld.centreRenderer,
-        );
+      if (tm.isActive) {
+        tm.update(dt);
       } else {
         this._followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
       }
 
       this._followerVis.sync(this._followerMgr.followers, this.microWorld.centreRenderer);
-
       this._tilePanel.update(this.microWorld.getTileInfo());
       this._compass.update(this.cameraController.azimuth);
-      this._turnHud.update(this._turnController, this._followerMgr.followers, this._actionMode, this._turnController.playerRanLastTurn);
 
       perf.frameEnd();
     };
-  }
-
-  // ── Turn mode ──────────────────────────────────────────────────────────────
-
-  _toggleTurnMode() {
-    const tc        = this._turnController;
-    const wasActive = tc.isActive;
-
-    // Always reset action mode when toggling (enter or exit)
-    this._actionMode = 'none';
-    this._actionBar?.setActive('none');
-
-    if (!wasActive) {
-      // Entering turn mode: pause macro sim + release movement keys
-      clearInterval(this._macroTimer);
-      this._macroTimer = null;
-      ['w','a','s','d'].forEach(k => this.microWorld.keyUp(k));
-    }
-
-    tc.toggle(
-      this.microWorld.player,
-      this._followerMgr.followers,
-      this.microWorld.centreRenderer,
-    );
-
-    if (wasActive) {
-      // Exiting turn mode: resume macro sim
-      this._macroTimer = setInterval(() => {
-        this.macroGame.advanceDay();
-        this.macroPanel.update(this.macroGame);
-        this._flushMacroLog();
-      }, MACRO_INTERVAL);
-    }
-
-    debug(tc.isActive
-      ? '[Turn] Turn mode ON — macro paused.'
-      : '[Turn] Turn mode OFF — macro resumed.',
-    );
-  }
-
-  // Reposition (or hide) the stop highlight meshes.
-  // Red-orange quad on the player's current tile (sudden stop).
-  // Amber quad on the tile 1 step forward (gradual stop), hidden if that tile is blocked.
-  _updateStopHighlights() {
-    const tc           = this._turnController;
-    const isStopMode   = tc?.isActive && tc.state === 'player' && this._actionMode === 'stop';
-    if (!isStopMode) {
-      this._stopHighlightSudden.visible  = false;
-      this._stopHighlightGradual.visible = false;
-      return;
-    }
-    const player = this.microWorld.player;
-    const cr     = this.microWorld.centreRenderer;
-    const place  = (mesh, tx, tz) => {
-      const elev = cr ? cr.elevationAt(tx + 0.5, tz + 0.5) : 0;
-      mesh.position.set(tx + 0.5, elev + 0.06, tz + 0.5);
-      mesh.visible = true;
-    };
-    place(this._stopHighlightSudden, Math.floor(player.px), Math.floor(player.py));
-    const gradual = tc.getStopGradualTile(player, this.microWorld.centreGrid, this._followerMgr.followers);
-    if (gradual) {
-      place(this._stopHighlightGradual, gradual.tx, gradual.tz);
-    } else {
-      this._stopHighlightGradual.visible = false;
-    }
-  }
-
-  // Reposition (or hide) the run-path highlight meshes based on the current
-  // player facing and whether both tiles in the run path are passable.
-  _updateRunHighlight() {
-    const tc           = this._turnController;
-    const isPlayerTurn = tc?.isActive && tc.state === 'player';
-
-    // Run is only available if total facing rotation since turn start is within ±45°.
-    // This is cumulative: facing changes made in Move mode also consume the budget.
-    const player  = this.microWorld.player;
-    const facingDrift = isPlayerTurn
-      ? Math.abs(((player.legAngle - this._facingAtTurnStart + 3 * Math.PI) % (2 * Math.PI)) - Math.PI)
-      : Infinity;
-    const withinRunLimit = facingDrift <= Math.PI / 4 + 0.001; // small epsilon for float noise
-    const targets = (isPlayerTurn && withinRunLimit)
-      ? tc.getRunTargets(player, this.microWorld.centreGrid, this._followerMgr.followers)
-      : [];
-    this._runTargets = targets;
-    this._actionBar?.setRunEnabled(targets.length > 0);
-
-    // Show path highlights only when Run mode is active and targets exist
-    if (isPlayerTurn && this._actionMode === 'run' && targets.length > 0) {
-      const cr = this.microWorld.centreRenderer;
-      const place = (mesh, tx, tz) => {
-        const elev = cr ? cr.elevationAt(tx + 0.5, tz + 0.5) : 0;
-        mesh.position.set(tx + 0.5, elev + 0.06, tz + 0.5);
-        mesh.visible = true;
-      };
-      targets.forEach((t, i) => {
-        if (i < this._runHighlightMids.length) place(this._runHighlightMids[i], t.midX, t.midZ);
-        if (i < this._runHighlightDsts.length) place(this._runHighlightDsts[i], t.tx,   t.tz);
-      });
-      for (let i = targets.length; i < this._runHighlightMids.length; i++) {
-        this._runHighlightMids[i].visible = false;
-        this._runHighlightDsts[i].visible = false;
-      }
-    } else {
-      for (const m of this._runHighlightMids) m.visible = false;
-      for (const m of this._runHighlightDsts) m.visible = false;
-    }
   }
 
   // ── Micro ──────────────────────────────────────────────────────────────────
