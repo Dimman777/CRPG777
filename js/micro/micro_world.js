@@ -74,17 +74,18 @@ export class MicroWorld {
     // 3 more cover in-flight load-queue items.
     this._initPool(28);
 
-    // Load the inner 3×3 synchronously so the visible area is complete on
-    // frame 1 (no pop-in when the player first moves).  _syncChunkPool then
-    // defers only the outer ring (16 chunks) to the load queue.
+    // Load the full 5×5 synchronously on first init so there's zero background
+    // work during the first few seconds of gameplay (eliminates startup jitter).
+    // ~80ms one-time cost, but the player won't notice since the start screen is
+    // still visible.  _syncChunkPool positions groups and finds nothing to defer.
     const map = this._macroMap;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
         const cx = this._mx + dx, cy = this._my + dy;
         if (map.inBounds(cx, cy)) this._loadChunk(cx, cy);
       }
     }
-    this._syncChunkPool();       // positions all groups, defers outer ring
+    this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
     if (centre) {
