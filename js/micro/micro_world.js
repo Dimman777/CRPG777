@@ -243,6 +243,9 @@ export class MicroWorld {
     my = Math.max(0, Math.min(map.height - 1, my));
     this._mx = mx;
     this._my = my;
+    // Sync first to unload old chunks and free pool slots before loading new ones.
+    // Without this, teleporting far away exhausts the pool (25 old + 9 new > 28).
+    this._syncChunkPool();
     // Load inner 3×3 synchronously so the destination is fully visible.
     const m = this._macroMap;
     for (let dy = -1; dy <= 1; dy++)
@@ -251,7 +254,6 @@ export class MicroWorld {
         if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
           this._loadChunk(cx, cy, false);
       }
-    this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     this._dispatchCellChange();
     const centre = this._centreChunk;
