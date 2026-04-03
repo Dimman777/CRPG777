@@ -33,6 +33,7 @@ import { TurnHud }         from './ui/turn_hud.js';
 import { ActionBar }       from './ui/action_bar.js';
 import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
+import { RNG }             from './core/rng.js';
 import { PerfOverlay }     from './ui/perf_overlay.js';
 
 const GRID_W               = 10;
@@ -97,10 +98,16 @@ export class Game {
     this._actionMode           = 'none'; // 'none' | 'move' | 'run' | 'stop'
     this._facingAtTurnStart    = 0;     // player legAngle at the start of each PLAYER turn
     this._chunkOverrides       = null;  // ChunkOverrides — shared with the macro map editor
+    this._sharedWorld          = null;  // { seed, map, worldData } — set in _initExploration
+    this._playerCell           = null;  // { mx, my } — updated on cell change events
     this._playerCharId         = 'grendoli';
     this._charSheet            = null;
     this._contextMenu          = null;  // right-click follower context menu div
   }
+
+  // Public getters for state that index.html / overlay scripts may need.
+  get sharedWorld() { return this._sharedWorld; }
+  get playerCell()  { return this._playerCell; }
 
   start(worldOpts = {}) {
     this._playerCharId = worldOpts.heroId ?? 'grendoli';
@@ -126,6 +133,7 @@ export class Game {
     window.addEventListener('keydown', this._onCameraKey);
 
     this._perf = new PerfOverlay();
+    this._rng  = null; // created in _initMacro from world seed
     this.started = true;
     this._initMacro();
     this._initMicro();
@@ -180,6 +188,10 @@ export class Game {
   _initExploration(opts = {}) {
     const SEED       = opts.seed      ?? 42;
     const NUM_FAULTS = opts.numFaults ?? 0;
+    // Master gameplay RNG — seeded from world seed so all gameplay randomness
+    // is deterministic from the same seed.  Cosmetic randomness (head-look etc.)
+    // still uses Math.random() and does not affect game state.
+    this._rng = new RNG(SEED ^ 0x47414D45); // "GAME" in hex, distinct from world-gen seed
     this._chunkOverrides = opts.chunkOverrides ?? new ChunkOverrides();
 
     // Use a pre-built map (from start screen or bitmap loader) if provided,
@@ -194,7 +206,8 @@ export class Game {
       const pop  = new WorldPopulator();
       worldData  = pop.populate(macroMap, SEED);
     }
-    window._sharedWorld = { seed: SEED, numFaults: NUM_FAULTS, map: macroMap, worldData };
+    this._sharedWorld = { seed: SEED, numFaults: NUM_FAULTS, map: macroMap, worldData };
+    window._sharedWorld = this._sharedWorld; // legacy — index.html start screen reads this
 
     // Use provided start position or find nearest passable cell from map centre.
     let startMx = opts.startMx, startMy = opts.startMy;
@@ -230,12 +243,16 @@ export class Game {
     this._tilePanel     = new TilePanel();
     this._compass       = new Compass();
     const updateLocation = ({ mx, my }) => {
-      const cell = window._sharedWorld?.map.get(mx, my);
-      this._locationPanel.update(cell, window._sharedWorld?.worldData, mx, my);
+      const cell = this._sharedWorld?.map.get(mx, my);
+      this._locationPanel.update(cell, this._sharedWorld?.worldData, mx, my);
     };
-    window.addEventListener('playerCellChanged', e => updateLocation(e.detail));
+    window.addEventListener('playerCellChanged', e => {
+      this._playerCell = e.detail;
+      updateLocation(e.detail);
+    });
     // Apply immediately for the start cell (event already fired before listener registered).
-    if (window._playerCell) updateLocation(window._playerCell);
+    // Apply for the start cell (micro_world fires the event before this listener is registered).
+    if (this._playerCell) updateLocation(this._playerCell);
 
     // Teleport from macro map "Go Here" button
     window.addEventListener('goToCell', e => {
@@ -555,7 +572,7 @@ export class Game {
     this.cameraController.setFrustumHalf(8);
 
     // Followers
-    this._followerMgr    = new FollowerManager();
+    this._followerMgr    = new FollowerManager(this._rng);
     this._followerVis    = new FollowerVisuals(this.scene.scene);
     this._formationPanel = new FormationPanel(this._charSheet);
 
@@ -853,7 +870,7 @@ export class Game {
       for (const c of conditions) debug(`[Bridge] ${c.desc}`);
     }
 
-    this.combatMgr = new CombatManager([...teamA, ...teamB], GRID_W, GRID_H);
+    this.combatMgr = new CombatManager([...teamA, ...teamB], GRID_W, GRID_H, this._rng);
     this.combatMgr.setup();
     this.actorVisuals.reset();
     this._syncCombatVisuals();

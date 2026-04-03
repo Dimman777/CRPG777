@@ -60,7 +60,8 @@ function clampOffset(diff) {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export class FollowerManager {
-  constructor() {
+  constructor(rng = null) {
+    this._rng              = rng;
     this._followers        = [];
     this._mode             = FORMATION_MODE.LOOSE;
     this._lastPx           = null;
@@ -72,6 +73,9 @@ export class FollowerManager {
 
   get followers() { return this._followers; }
   get mode()      { return this._mode; }
+
+  // Seeded random — falls back to Math.random if no RNG was provided.
+  _rand() { return this._rng ? this._rng.next() : this._rand(); }
   get count()     { return this._followers.length; }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -135,35 +139,39 @@ export class FollowerManager {
 
   _makeFollower(char, slotIdx, sx, sz, hx, hz) {
     return {
+      // ── Identity (immutable) ──
       id:             `follower_${char.id}`,
       charId:         char.id,
       charData:       char,
       name:           char.name,
       color:          char.color,
+
+      // ── Simulation state (serializable) ──
       slot:           slotIdx,
       px:             sx,
       py:             sz,
-      worldY:         0,
       headingX:       hx,
       headingZ:       hz,
       legAngle:       Math.atan2(hx, hz),
       torsoOffset:    0,
       headOffset:     0,
       headLookTarget: 0,
-      headLookTimer:  slotIdx * 0.7 + Math.random() * 3 + 1,
+      headLookTimer:  slotIdx * 0.7 + this._rand() * 3 + 1,
       state:          STATE.FOLLOWING,
-      stateTimer:     slotIdx * 1.5 + Math.random() * 2,
+      stateTimer:     slotIdx * 1.5 + this._rand() * 2,
       targetPx:       sx,
       targetPy:       sz,
       chatPartner:    null,
+      blockTimer:     0,
+      idleCol:        0,
+      idleRow:        0,
+
+      // ── Transient visual hints (not serialized — rebuilt from state) ──
       showBanter:     false,
       banterTimer:    0,
       showQuip:       false,
       quipText:       '',
       quipTimer:      0,
-      blockTimer:     0,
-      idleCol:        0,
-      idleRow:        0,
       ranLastTurn:    false,
     };
   }
@@ -287,7 +295,7 @@ export class FollowerManager {
     // First stopped frame: initial scatter.
     if (!playerMoving && this._prevPlayerMoving && this._mode === FORMATION_MODE.LOOSE) {
       this._assignIdlePositions(hx, hz, 0);
-      this._idleScatterTimer = 25 + Math.random() * 15; // first extended scatter in 25–40 s
+      this._idleScatterTimer = 25 + this._rand() * 15; // first extended scatter in 25–40 s
     }
 
     // After 30 s idle: periodically re-scatter with growing range.
@@ -297,7 +305,7 @@ export class FollowerManager {
         // Extra range grows by 1 tile per 10 s of idle beyond the 30 s threshold, capped at 12.
         const extraRange = Math.min(12, (this._idleTime - 30) / 10);
         this._assignIdlePositions(hx, hz, extraRange);
-        this._idleScatterTimer = 20 + Math.random() * 15;
+        this._idleScatterTimer = 20 + this._rand() * 15;
       }
     }
 
@@ -315,9 +323,9 @@ export class FollowerManager {
     for (let i = 0; i < n; i++) {
       const f = this._followers[i];
       const baseAng = (i / n) * 2 * Math.PI;
-      const jitter  = (Math.random() - 0.5) * Math.PI * 0.5;   // ±45°
+      const jitter  = (this._rand() - 0.5) * Math.PI * 0.5;   // ±45°
       const ang     = baseAng + jitter;
-      const dist    = 2.5 + Math.random() * 3.5 + extraRange;  // grows with idle time
+      const dist    = 2.5 + this._rand() * 3.5 + extraRange;  // grows with idle time
       f.idleCol = Math.sin(ang) * dist;
       f.idleRow = -Math.cos(ang) * dist; // negative row = ahead of PC
     }
@@ -362,7 +370,7 @@ export class FollowerManager {
         f.targetPx = slotX;
         f.targetPy = slotZ;
         if (f.stateTimer <= 0 && distToSlot < LOOSE_ORBIT_DIST) {
-          const roll = Math.random();
+          const roll = this._rand();
           // During extended idle: higher wander chance, moderate chat chance.
           const wanderThresh = extendedIdle ? 0.55 : 0.30;
           const chatThresh   = extendedIdle ? 0.75 : 0.50;
@@ -373,12 +381,12 @@ export class FollowerManager {
               f.state      = STATE.WANDERING;
               f.targetPx   = wt.x;
               f.targetPy   = wt.z;
-              f.stateTimer = 2.0 + Math.random() * 3.0; // loiter time
+              f.stateTimer = 2.0 + this._rand() * 3.0; // loiter time
               f.showQuip   = true;
               f.quipText   = "What's that?";
               f.quipTimer  = 2.0;
             } else {
-              f.stateTimer = 3.0 + Math.random() * 5.0;
+              f.stateTimer = 3.0 + this._rand() * 5.0;
             }
           } else if (roll < chatThresh) {
             // Try to find a chat partner — could be a follower or the PC
@@ -386,7 +394,7 @@ export class FollowerManager {
             if (partner) {
               f.state       = STATE.CHATTING;
               f.chatPartner = partner.id; // 'player' or 'follower_N'
-              f.stateTimer  = 3.5 + Math.random() * 4.0;
+              f.stateTimer  = 3.5 + this._rand() * 4.0;
               if (!partner.isPc) {
                 // Only mirror state for follower-to-follower chat
                 partner.state       = STATE.CHATTING;
@@ -394,10 +402,10 @@ export class FollowerManager {
                 partner.stateTimer  = f.stateTimer;
               }
             } else {
-              f.stateTimer = 3.0 + Math.random() * 5.0;
+              f.stateTimer = 3.0 + this._rand() * 5.0;
             }
           } else {
-            f.stateTimer = 3.0 + Math.random() * 6.0;
+            f.stateTimer = 3.0 + this._rand() * 6.0;
           }
         }
         // Force return if slot has drifted too far (relaxed during extended idle).
@@ -488,7 +496,7 @@ export class FollowerManager {
         f.targetPy = slotZ;
         if (distToSlot < ARRIVE_DIST * 2) {
           f.state      = STATE.FOLLOWING;
-          f.stateTimer = 2.0 + Math.random() * 3.0;
+          f.stateTimer = 2.0 + this._rand() * 3.0;
         }
         break;
     }
@@ -535,14 +543,14 @@ export class FollowerManager {
   _tickHeadLook(dt, f) {
     f.headLookTimer -= dt;
     if (f.headLookTimer <= 0) {
-      const r = Math.random();
+      const r = this._rand();
       if (r < 0.40) {
         f.headLookTarget = 0; // glance back to centre
       } else {
         const side = r < 0.70 ? -1 : 1;
-        f.headLookTarget = side * (Math.PI / 8 + Math.random() * Math.PI / 8); // π/8–π/4
+        f.headLookTarget = side * (Math.PI / 8 + this._rand() * Math.PI / 8); // π/8–π/4
       }
-      f.headLookTimer = 3 + Math.random() * 5; // 3–8 s between looks
+      f.headLookTimer = 3 + this._rand() * 5; // 3–8 s between looks
     }
   }
 
@@ -708,7 +716,7 @@ export class FollowerManager {
       const dB = Math.hypot(b.x - follower.px, b.z - follower.py) * (dotB > 0 ? 0.55 : 1.0);
       return dA - dB;
     });
-    return unique[Math.floor(Math.random() * Math.min(5, unique.length))];
+    return unique[Math.floor(this._rand() * Math.min(5, unique.length))];
   }
 
   _pickChatPartner(requester, playerPx, playerPz) {
@@ -717,7 +725,7 @@ export class FollowerManager {
     const CHAT_RANGE = 5.0;
 
     // ~25% chance to chat with the PC if they are close
-    if (Math.random() < 0.25 && Math.hypot(requester.px - playerPx, requester.py - playerPz) < CHAT_RANGE) {
+    if (this._rand() < 0.25 && Math.hypot(requester.px - playerPx, requester.py - playerPz) < CHAT_RANGE) {
       return { id: 'player', isPc: true };
     }
     const candidates = this._followers.filter(f =>
@@ -726,6 +734,6 @@ export class FollowerManager {
       Math.hypot(f.px - requester.px, f.py - requester.py) < CHAT_RANGE
     );
     if (candidates.length === 0) return null;
-    return candidates[Math.floor(Math.random() * candidates.length)];
+    return candidates[Math.floor(this._rand() * candidates.length)];
   }
 }

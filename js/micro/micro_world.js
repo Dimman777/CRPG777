@@ -12,7 +12,8 @@ import { MacroMap }       from '../macro/macro_map.js';
 import { MacroCell }      from '../macro/macro_cell.js';
 import { ChunkGenerator, ELEV_LEVELS } from './chunk_gen.js';
 import { ChunkRenderer, ELEVATION_SCALE } from '../render/chunk_renderer.js';
-import { Player }         from './player.js';
+import { PlayerState }    from './player_state.js';
+import { PlayerView }     from './player.js';
 import { CHUNK_SIZE }     from './micro_grid.js';
 
 export class MicroWorld {
@@ -24,7 +25,8 @@ export class MicroWorld {
     this._scene    = null;
     this._macroMap = null;
     this._chunkGen = null;
-    this._player   = null;
+    this._playerState = null;
+    this._playerView  = null;
     this._mx       = 0;   // centre macro cell X
     this._my       = 0;   // centre macro cell Y
 
@@ -62,7 +64,8 @@ export class MicroWorld {
     this._macroMap = macroMap ?? this._buildTestMap();
     this._chunkGen = new ChunkGenerator(seed);
     this._overrides = overrides;
-    this._player   = new Player(scene);
+    this._playerState = new PlayerState();
+    this._playerView  = new PlayerView(scene);
 
     this._mx = startMx;
     this._my = startMy;
@@ -71,22 +74,25 @@ export class MicroWorld {
     // 3 more cover in-flight load-queue items.
     this._initPool(28);
 
-    // Load the inner 3×3 synchronously so the visible area is complete on
-    // frame 1 (no pop-in when the player first moves).  _syncChunkPool then
-    // defers only the outer ring (16 chunks) to the load queue.
+    // Load the full 5×5 synchronously on first init so there's zero background
+    // work during the first few seconds of gameplay (eliminates startup jitter).
+    // ~80ms one-time cost, but the player won't notice since the start screen is
+    // still visible.  _syncChunkPool positions groups and finds nothing to defer.
     const map = this._macroMap;
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -2; dy <= 2; dy++) {
+      for (let dx = -2; dx <= 2; dx++) {
         const cx = this._mx + dx, cy = this._my + dy;
         if (map.inBounds(cx, cy)) this._loadChunk(cx, cy);
       }
     }
-    this._syncChunkPool();       // positions all groups, defers outer ring
+    this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      this._player.place(spawn.x, spawn.y, centre.renderer);
+      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
+      this._playerState.place(spawn.x, spawn.y, elevFn);
+      this._playerView.sync(this._playerState);
     }
 
     this._dispatchCellChange();
@@ -94,7 +100,7 @@ export class MicroWorld {
 
   // Call every frame (dt in seconds).
   update(dt, cameraController) {
-    if (!this._player) return;
+    if (!this._playerState) return;
 
     // Budget: each frame does ONE of: chunk gen phase, re-render slice, or nothing.
     const _pb = this.perfBegin;
@@ -147,20 +153,22 @@ export class MicroWorld {
       this._rerenderIncremental(key);
     }
 
-    const centre = this._centreChunk;
-    const az     = cameraController?.azimuth ?? 45;
-    const dir    = this._player.update(dt, centre?.grid, centre?.renderer, az);
+    const centre  = this._centreChunk;
+    const az      = cameraController?.azimuth ?? 45;
+    const elevFn  = centre?.renderer ? (tx, ty) => centre.renderer.elevationAt(tx, ty) : null;
+    const pState  = this._playerState;
+    const dir     = pState.update(dt, centre?.grid, elevFn, az);
 
     if (dir !== 'none') {
       const S = CHUNK_SIZE;
       let nmx = this._mx, nmy = this._my;
-      let epx = this._player.px, epy = this._player.py;
+      let epx = pState.px, epy = pState.py;
 
       // Preserve the crossing overshoot so the player's speed is continuous.
-      if (dir === 'east')  { nmx++; epx = this._player.px - S; }
-      if (dir === 'west')  { nmx--; epx = this._player.px + S; }
-      if (dir === 'south') { nmy++; epy = this._player.py - S; }
-      if (dir === 'north') { nmy--; epy = this._player.py + S; }
+      if (dir === 'east')  { nmx++; epx = pState.px - S; }
+      if (dir === 'west')  { nmx--; epx = pState.px + S; }
+      if (dir === 'south') { nmy++; epy = pState.py - S; }
+      if (dir === 'north') { nmy--; epy = pState.py + S; }
 
       // Clamp to map
       const map = this._macroMap;
@@ -197,29 +205,31 @@ export class MicroWorld {
       }
 
       // Notify followers of the same px/py adjustment applied to the player
-      const dPx = epx - this._player.px;
-      const dPy = epy - this._player.py;
-      this._player.px = epx;
-      this._player.py = epy;
+      const dPx = epx - pState.px;
+      const dPy = epy - pState.py;
+      pState.px = epx;
+      pState.py = epy;
       if ((dPx !== 0 || dPy !== 0) && this.onChunkTransition) {
         const _endFT = _pb?.('followerShift');
         this.onChunkTransition(dPx, dPy);
         _endFT?.();
       }
       const newCentre = this._centreChunk;
-      this._player.refresh(newCentre?.renderer);
+      const newElevFn = newCentre?.renderer ? (tx, ty) => newCentre.renderer.elevationAt(tx, ty) : null;
+      pState.refreshElevation(newElevFn);
     }
     // No explicit preload needed — the 5×5 window ensures chunks one ring beyond
     // the visible 3×3 are already loading/loaded via the deferred queue.
 
-    const pos = this._player.position;
+    this._playerView.sync(pState);
+    const pos = pState.position;
     if (cameraController) cameraController.setTarget(pos.x, pos.y, pos.z);
     return pos;
   }
 
   // Teleport the player to the centre of macro cell (mx, my).
   teleportTo(mx, my) {
-    if (!this._player) return;
+    if (!this._playerState) return;
     const map = this._macroMap;
     mx = Math.max(0, Math.min(map.width  - 1, mx));
     my = Math.max(0, Math.min(map.height - 1, my));
@@ -239,17 +249,21 @@ export class MicroWorld {
     const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      this._player.place(spawn.x, spawn.y, centre.renderer);
+      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
+      this._playerState.place(spawn.x, spawn.y, elevFn);
+      this._playerView.sync(this._playerState);
     }
   }
 
-  keyDown(key) { this._player?.keyDown(key); }
-  keyUp(key)   { this._player?.keyUp(key);   }
+  keyDown(key) { this._playerState?.keyDown(key); }
+  keyUp(key)   { this._playerState?.keyUp(key);   }
 
-  rotateFacingLeft()  { this._player?.rotateFacingLeft();  }
-  rotateFacingRight() { this._player?.rotateFacingRight(); }
+  rotateFacingLeft()  { this._playerState?.rotateFacingLeft();  }
+  rotateFacingRight() { this._playerState?.rotateFacingRight(); }
 
-  get player()        { return this._player; }
+  // Returns the PlayerState (serializable, no Three.js).
+  // All external callers that read player.px, player.position, etc. keep working.
+  get player()        { return this._playerState; }
   get centreGrid()    { return this._centreChunk?.grid     ?? null; }
   get centreRenderer(){ return this._centreChunk?.renderer ?? null; }
 
@@ -271,10 +285,10 @@ export class MicroWorld {
   // Returns micro-tile data for the player's current standing tile, or null.
   getTileInfo() {
     const centre = this._centreChunk;
-    if (!centre || !this._player) return null;
+    if (!centre || !this._playerState) return null;
     const S  = CHUNK_SIZE;
-    const tx = Math.max(0, Math.min(S - 1, Math.floor(this._player.px)));
-    const ty = Math.max(0, Math.min(S - 1, Math.floor(this._player.py)));
+    const tx = Math.max(0, Math.min(S - 1, Math.floor(this._playerState.px)));
+    const ty = Math.max(0, Math.min(S - 1, Math.floor(this._playerState.py)));
     const i  = ty * S + tx;
     const g  = centre.grid;
     return {
@@ -458,7 +472,8 @@ export class MicroWorld {
     if (!entry) return;
     // Cancel any in-progress incremental render for this chunk.
     if (this._activeSlices) {
-      this._activeSlices = this._activeSlices.filter(s => s.key !== key);
+      const idx = this._activeSlices.findIndex(s => s.key === key);
+      if (idx >= 0) this._activeSlices.splice(idx, 1);
     }
     this._releaseRenderer(entry);  // clears obstacles, hides meshes, returns to pool
     this._chunks.delete(key);
@@ -482,9 +497,8 @@ export class MicroWorld {
   _rerenderOne(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
-    const [cx, cy] = key.split(',').map(Number);
     entry.renderer.perfBegin = this.perfBegin;
-    entry.renderer.render(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.render(entry.grid, this._collectNeighbors(entry.mx, entry.my));
     entry.renderer.perfBegin = null;
   }
 
@@ -492,9 +506,8 @@ export class MicroWorld {
   _rerenderIncremental(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
-    const [cx, cy] = key.split(',').map(Number);
     entry.renderer.perfBegin = this.perfBegin;
-    entry.renderer.beginIncremental(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.beginIncremental(entry.grid, this._collectNeighbors(entry.mx, entry.my));
     entry.renderer.perfBegin = null;
     // Track this renderer as having an active incremental render.
     if (!this._activeSlices) this._activeSlices = [];

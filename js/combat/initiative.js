@@ -4,8 +4,9 @@ import { rollStatDie } from './dice.js';
 // initiative (with an optional cost penalty) and is re-inserted into the queue.
 // The combatant with the highest value acts next.
 export class InitiativeQueue {
-  constructor() {
+  constructor(rng = null) {
     this._queue = []; // [{ combatant, value }], sorted descending
+    this._rng   = rng;
   }
 
   // Roll initial initiative for all combatants using their reflexes stat.
@@ -51,7 +52,7 @@ export class InitiativeQueue {
   }
 
   _roll(combatant) {
-    const result = rollStatDie(combatant.getStat('reflexes'));
+    const result = rollStatDie(combatant.getStat('reflexes'), this._rng);
     combatant.initiativeValue = result.total;
     return result.total;
   }
