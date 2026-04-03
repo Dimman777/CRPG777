@@ -51,10 +51,11 @@ export function pickLeaderAction(leader, faction, allRegions) {
     return { type: 'provision', regionId: hungry.id, cost: { treasury: 15 } };
 
   // Priority 3 — develop a region if funds allow
-  // Aggressive leaders invest more readily
-  const threshold = 20 - leader.macroProfile.aggression;
-  if (treasury >= threshold)
-    return { type: 'develop', regionId: territory[0].id, cost: { treasury: 15 } };
+  // Aggressive leaders invest more readily (lower threshold to act)
+  const developCost = 15;
+  const threshold   = 20 - leader.macroProfile.aggression;
+  if (treasury >= Math.max(developCost, threshold))
+    return { type: 'develop', regionId: territory[0].id, cost: { treasury: developCost } };
 
   return { type: 'idle' };
 }

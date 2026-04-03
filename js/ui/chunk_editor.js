@@ -198,10 +198,11 @@ export class ChunkEditor {
     // Close on backdrop click
     wrap.addEventListener('click', e => { if (e.target === wrap) this.close(); });
 
-    // Escape closes
-    document.addEventListener('keydown', e => {
+    // Escape closes — stored for cleanup
+    this._onEscape = e => {
       if (e.key === 'Escape' && this._el.style.display !== 'none') this.close();
-    });
+    };
+    document.addEventListener('keydown', this._onEscape);
 
     return wrap;
   }

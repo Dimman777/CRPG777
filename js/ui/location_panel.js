@@ -169,7 +169,8 @@ export class LocationPanel {
         html += sep;
         html += `<div style="color:#cc8844"><b>${POI_LABELS[poi.type] ?? poi.type}:</b> ${poi.name}</div>`;
         if (poi.dangerLevel) {
-          html += `<div style="color:#777;font-size:10px">Danger: ${'★'.repeat(poi.dangerLevel)}${'☆'.repeat(5 - poi.dangerLevel)}</div>`;
+          const dl = Math.max(1, Math.min(5, poi.dangerLevel));
+          html += `<div style="color:#777;font-size:10px">Danger: ${'★'.repeat(dl)}${'☆'.repeat(5 - dl)}</div>`;
         }
       }
     }

@@ -235,6 +235,13 @@ export class ChunkRenderer {
     this._pendingFvi      = 0;
     this._pendingWvi      = 0;
     this._pendingRowStart = 0;
+    // Hide meshes during incremental build — the floor buffer contains stale
+    // data from the previous chunk until all slices complete.  Three.js scans
+    // the entire position buffer for computeBoundingSphere(), and stale NaN
+    // values from a prior failed render trigger warnings.
+    this._floorMesh.visible = false;
+    this._wallMesh.visible  = false;
+    this._gridMesh.visible  = false;
   }
 
   // Process the next slice of rows. Returns true when done.
@@ -347,7 +354,7 @@ export class ChunkRenderer {
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].elevation[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].elevation[(S-1) * S + tx];
       if (ty >= S && nbrGrids[ '0,1']) return nbrGrids[ '0,1'].elevation[tx];
-      return grid.elevation[cl(ty,0,S-1) * S + cl(tx,0,S-1)];
+      return grid.elevation[cl(ty,0,S-1) * S + cl(tx,0,S-1)] || 0;
     };
     const groundOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.ground[ty * S + tx];
@@ -361,7 +368,7 @@ export class ChunkRenderer {
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].ground[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].ground[(S-1) * S + tx];
       if (ty >= S && nbrGrids[ '0,1']) return nbrGrids[ '0,1'].ground[tx];
-      return grid.ground[cl(ty,0,S-1) * S + cl(tx,0,S-1)];
+      return grid.ground[cl(ty,0,S-1) * S + cl(tx,0,S-1)] || 0;
     };
 
     // ── Zone colour helpers — write into _ZC, zero allocations ──────────

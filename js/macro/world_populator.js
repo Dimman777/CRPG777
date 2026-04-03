@@ -397,10 +397,14 @@ export class WorldPopulator {
           const sId = `${k.id}_city_0`;
           const fp  = this._buildFootprint(map, c.x, c.y, rngInt(rng, 4, 7), rng);
           this._stampFootprint(map, fp, 'city', sId);
+          const nearAnc = ancientSites.find(s =>
+            !s.overlaidBySettlement && dist(c.x, c.y, s.x, s.y) <= 4 && rng() < 0.35
+          );
+          if (nearAnc) nearAnc.overlaidBySettlement = sId;
           k.settlements.push({
             id: sId, type: 'city', name: genCityName(rng),
             coreX: c.x, coreY: c.y,
-            footprint: fp, isCapital: false, builtOverAncient: null,
+            footprint: fp, isCapital: false, builtOverAncient: nearAnc?.id ?? null,
           });
           this._assignSettlementProfile(k.settlements[k.settlements.length - 1], map, rng);
           placedCores.push(c);
