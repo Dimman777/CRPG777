@@ -364,6 +364,13 @@
     </div>
   </div>
 
+  <div id="screen-fade" style="
+    position:fixed; inset:0; z-index:9999;
+    background:#000; opacity:1;
+    transition: opacity 0.2s ease-in-out;
+    pointer-events:none;
+  "></div>
+
   <div id="version-stamp" style="
     position:fixed; bottom:4px; right:4px; z-index:9998;
     font:10px monospace; color:#888; pointer-events:none;
@@ -389,6 +396,23 @@
     import { CHARACTERS }         from './js/data/characters_data.js';
     import { CharacterSheet }     from './js/ui/character_sheet.js';
     import { HeroSelect }         from './js/ui/hero_select.js';
+
+    // ── Screen fade utility ──────────────────────────────────────────────────
+    const screenFade = document.getElementById('screen-fade');
+    function fadeToBlack() {
+      return new Promise(resolve => {
+        screenFade.style.opacity = '1';
+        screenFade.style.pointerEvents = 'all';
+        setTimeout(resolve, 200);
+      });
+    }
+    function fadeFromBlack() {
+      screenFade.style.opacity = '0';
+      screenFade.style.pointerEvents = 'none';
+    }
+    // Start screen is visible — fade is not needed until game starts
+    screenFade.style.opacity = '0';
+    screenFade.style.pointerEvents = 'none';
 
     const overlay    = document.getElementById('map-preview-overlay');
     const canvas     = document.getElementById('map-preview-canvas');
@@ -488,7 +512,8 @@
 
     const editChunkBtn = document.getElementById('edit-chunk-btn');
 
-    function enterGame(opts) {
+    async function enterGame(opts) {
+      await fadeToBlack();
       preGame = false;
       startScreen.style.display = 'none';
       overlay.classList.remove('visible');
@@ -496,7 +521,12 @@
       mapPreviewBtn.style.display = 'block';
       editChunkBtn.style.display = 'block';
       view.goButtonLabel = 'Go Here';
+      // World fades in when fully loaded — onReady fires after all chunks are rendered.
       window._game.start({ ...opts, chunkOverrides: overrides });
+      // Player is placed synchronously, chunks render via setTimeout(0).
+      // Start fading in immediately — player appears on dark bg, terrain
+      // fills in during the 200ms fade as chunks render behind it.
+      fadeFromBlack();
     }
 
     editChunkBtn.addEventListener('click', () => {
@@ -511,12 +541,14 @@
 
     // ── "Go Here" / "Start Here" callback ───────────────────────────────────
 
-    view.onGoHere = (mx, my) => {
+    view.onGoHere = async (mx, my) => {
       if (!preGame) {
-        // In-game teleport
-        window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
+        // In-game teleport with fade
+        await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
+        window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
+        fadeFromBlack();
       } else {
         // Pre-game: show hero select before starting the adventure
         const seed   = parseInt(document.getElementById('map-seed-input').value) || 42;
@@ -540,12 +572,14 @@
 
     // ── Start Screen: Random World ───────────────────────────────────────────
 
-    document.getElementById('btn-random').addEventListener('click', () => {
+    document.getElementById('btn-random').addEventListener('click', async () => {
+      await fadeToBlack();
       startScreen.style.display = 'none';
       faultsLabel.style.display = '';          // show faults control for random worlds
       overlay.classList.add('visible');
       if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
       startFlash();
+      fadeFromBlack();
     });
 
     // ── Start Screen: Pre-set World ──────────────────────────────────────────
@@ -589,11 +623,13 @@
     // ── Load a preset world from its three bitmap URLs ────────────────────────
 
     async function loadPresetWorld(meta) {
+      await fadeToBlack();
       presetPanel.style.display = 'none';
       startScreen.style.display = 'none';
       overlay.classList.add('visible');
       statsEl.textContent = 'Loading bitmaps…';
       startFlash();
+      fadeFromBlack();
 
       try {
         const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
@@ -632,11 +668,13 @@
         return;
       }
 
+      await fadeToBlack();
       presetPanel.style.display = 'none';
       startScreen.style.display = 'none';
       overlay.classList.add('visible');
       statsEl.textContent = 'Loading bitmaps…';
       startFlash();
+      fadeFromBlack();
 
       try {
         const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
@@ -671,14 +709,16 @@
 
     // ── In-game World Map button ─────────────────────────────────────────────
 
-    mapPreviewBtn.addEventListener('click', () => {
+    mapPreviewBtn.addEventListener('click', async () => {
+      if (!preGame) await fadeToBlack();
       overlay.classList.add('visible');
       if (window._playerCell) view.setPlayerCell(window._playerCell.mx, window._playerCell.my);
       if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
       startFlash();
+      if (!preGame) fadeFromBlack();
     });
 
-    document.getElementById('map-close-btn').addEventListener('click', () => {
+    document.getElementById('map-close-btn').addEventListener('click', async () => {
       if (preGame) {
         // Return to start screen
         overlay.classList.remove('visible');
@@ -687,8 +727,10 @@
         startChoices.style.display = 'flex';
         presetPanel.style.display = 'none';
       } else {
+        await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
+        requestAnimationFrame(() => requestAnimationFrame(() => fadeFromBlack()));
       }
     });
 

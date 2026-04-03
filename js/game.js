@@ -91,6 +91,9 @@ export class Game {
   get sharedWorld() { return this._sharedWorld; }
   get playerCell()  { return this._playerCell; }
 
+  // Callback: fires when the world is fully loaded and rendered (init + teleport).
+  set onReady(fn) { this._onReady = fn; }
+
   start(worldOpts = {}) {
     this._playerCharId = worldOpts.heroId ?? 'grendoli';
     this._charSheet    = new CharacterSheet();
@@ -99,7 +102,8 @@ export class Game {
     this.cameraController = new CameraController(viewport.clientWidth, viewport.clientHeight);
     this.rendering        = new Rendering(this.scene);
     this.rendering.cameraController = this.cameraController;
-    this.rendering.start();
+    // Don't start the render loop yet — wait until init is complete so the
+    // first few frames don't compete with chunk generation for CPU time.
 
     // Store listener references for cleanup on restart/destroy.
     this._onResize = () => {
@@ -129,6 +133,10 @@ export class Game {
       this.macroPanel.update(this.macroGame);
       this._flushMacroLog();
     }, MACRO_INTERVAL);
+
+    // Start the render loop AFTER all init is complete — avoids RAF competing
+    // with chunk generation on the first few frames (eliminates init jitter).
+    this.rendering.start();
 
     debug('World loaded. WASD move · Q/E rotate camera · Z/C torso · Space toggle turn mode.');
   }
@@ -212,6 +220,8 @@ export class Game {
       }
     }
 
+    // Wire onReady BEFORE init — init fires onReady at the end of _loadAndPlacePlayer.
+    this.microWorld.onReady = () => { if (this._onReady) this._onReady(); };
     this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this._chunkOverrides);
     // Snap camera Y to starting elevation so it doesn't lerp from y=0.
     const startPos = this.microWorld.player?.position;

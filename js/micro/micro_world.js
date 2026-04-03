@@ -52,6 +52,10 @@ export class MicroWorld {
     this._loadQueueSet = new Set();
     this._pendingPhase2 = null; // deferred phase2 generation from previous frame
 
+    // Deferred visibility — chunks rendered in the background stay hidden until
+    // all deferred work completes, then become visible in one batch (no pop-in).
+    this._deferredReady = [];
+
     // getTileInfo() cache — avoids per-frame object allocation when standing still
     this._lastTileX     = -1;
     this._lastTileY     = -1;
@@ -79,30 +83,7 @@ export class MicroWorld {
     // 3 more cover in-flight load-queue items.
     this._initPool(28);
 
-    // Load the full 5×5 synchronously on first init so there's zero background
-    // work during the first few seconds of gameplay (eliminates startup jitter).
-    // ~80ms one-time cost, but the player won't notice since the start screen is
-    // still visible.  _syncChunkPool positions groups and finds nothing to defer.
-    const map = this._macroMap;
-    // Generate all grids first WITHOUT rendering (renderNow=false), then
-    // re-render all at once with full neighbour context.  This avoids NaN
-    // bounding-sphere warnings from chunks rendered before their neighbours exist.
-    for (let dy = -2; dy <= 2; dy++) {
-      for (let dx = -2; dx <= 2; dx++) {
-        const cx = this._mx + dx, cy = this._my + dy;
-        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
-      }
-    }
-    this._syncChunkPool();
-    this._rerenderAllWithNeighbors();
-    const centre = this._centreChunk;
-    if (centre) {
-      const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
-      const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
-      this._playerState.place(spawn.x, spawn.y, elevFn);
-      this._playerView.sync(this._playerState);
-    }
-
+    this._loadAndPlacePlayer();
     this._dispatchCellChange();
   }
 
@@ -119,46 +100,71 @@ export class MicroWorld {
     if (this._pendingPhase2) {
       const p = this._pendingPhase2;
       this._pendingPhase2 = null;
+      const _t = performance.now();
       const _endLoad = _pb?.('chunkLoad');
       const grid = this._chunkGen.generatePhase2(p.partial, this._overrides);
       _endLoad?.();
-      if (grid) this._finishChunkLoad(p.mx, p.my, p.key, grid);
+      if (grid) {
+        this._finishChunkLoad(p.mx, p.my, p.key, grid);
+        console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] gen2 (${p.mx},${p.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._loadQueue.length}q`);
+      }
       didWork = true;
     } else if (this._loadQueue.length > 0) {
       const item = this._loadQueue.shift();
       this._loadQueueSet.delete(item.key);
       if (!this._chunks.has(item.key)) {
+        const _t = performance.now();
         const _endLoad = _pb?.('chunkLoad');
         const partial = this._chunkGen.generatePhase1(this._macroMap, item.mx, item.my);
         _endLoad?.();
         if (partial) {
           this._pendingPhase2 = { partial, mx: item.mx, my: item.my, key: item.key };
+          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] gen1 (${item.mx},${item.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._loadQueue.length}q`);
         }
         didWork = true;
       }
     }
 
-    // Process active incremental slices (1 slice per frame).
+    // Process slices and start new rerenders with a time budget.
+    // During normal gameplay: 1 slice per frame (~1ms).
+    // During initial load-in: fills up to TIME_BUDGET_MS per frame so chunks
+    // appear faster without starving the render loop.
     if (!this._activeSlices) this._activeSlices = [];
-    if (!didWork && this._activeSlices.length > 0) {
-      const slice = this._activeSlices[0];
-      slice.renderer.perfBegin = _pb;
-      const _endRR = _pb?.('rerender');
-      const done = slice.renderer.renderSlice(8);
-      _endRR?.();
-      slice.renderer.perfBegin = null;
-      if (done) {
-        this._activeSlices.shift();
-        const entry = this._chunks.get(slice.key);
-        if (entry) entry.group.visible = true;
+    const TIME_BUDGET_MS = 6;
+    const budgetStart = performance.now();
+    while (performance.now() - budgetStart < TIME_BUDGET_MS) {
+      if (this._activeSlices.length > 0) {
+        const slice = this._activeSlices[0];
+        slice.renderer.perfBegin = _pb;
+        const _t = performance.now();
+        const _endRR = _pb?.('rerender');
+        const done = slice.renderer.renderSlice(8);
+        _endRR?.();
+        slice.renderer.perfBegin = null;
+        if (done) {
+          this._activeSlices.shift();
+          const entry = this._chunks.get(slice.key);
+          if (entry) {
+            entry.group.visible = true;
+            console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] rendered (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._rerenderQueue.length}rr ${this._activeSlices.length}sl`);
+          }
+        }
+        didWork = true;
+      } else if (this._rerenderQueue.length > 0) {
+        const key = this._rerenderQueue.shift();
+        this._rerenderSet.delete(key);
+        const entry = this._chunks.get(key);
+        if (entry && entry.group.visible) {
+          const _t = performance.now();
+          this._rerenderOne(key);
+          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] sync-rerender (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms`);
+        } else {
+          this._rerenderIncremental(key);
+        }
+        didWork = true;
+      } else {
+        break; // nothing left to process
       }
-      didWork = true;
-    }
-    // Start new incremental rerenders when no slices are active.
-    else if (!didWork && this._activeSlices.length === 0 && this._rerenderQueue.length > 0) {
-      const key = this._rerenderQueue.shift();
-      this._rerenderSet.delete(key);
-      this._rerenderIncremental(key);
     }
 
     const centre  = this._centreChunk;
@@ -229,7 +235,7 @@ export class MicroWorld {
     // No explicit preload needed — the 5×5 window ensures chunks one ring beyond
     // the visible 3×3 are already loading/loaded via the deferred queue.
 
-    this._playerView.sync(pState);
+    this._playerView.sync(pState, dt);
     const pos = pState.position;
     if (cameraController) cameraController.setTarget(pos.x, pos.y, pos.z);
     return pos;
@@ -239,28 +245,69 @@ export class MicroWorld {
   teleportTo(mx, my) {
     if (!this._playerState) return;
     const map = this._macroMap;
-    mx = Math.max(0, Math.min(map.width  - 1, mx));
-    my = Math.max(0, Math.min(map.height - 1, my));
-    this._mx = mx;
-    this._my = my;
-    // Load inner 3×3 synchronously so the destination is fully visible.
-    const m = this._macroMap;
+    this._mx = Math.max(0, Math.min(map.width  - 1, mx));
+    this._my = Math.max(0, Math.min(map.height - 1, my));
+    this._loadAndPlacePlayer();
+    this._dispatchCellChange();
+  }
+
+  // Shared init/teleport sequence: unload stale chunks, load full 5×5,
+  // re-render with neighbors, and place the player on a passable tile.
+  _loadAndPlacePlayer() {
+    const map = this._macroMap;
+
+    // 1. Flush all deferred work from any prior state
+    this._loadQueue.length = 0;
+    this._loadQueueSet.clear();
+    this._pendingPhase2 = null;
+    this._rerenderQueue.length = 0;
+    this._rerenderSet.clear();
+    if (this._activeSlices) this._activeSlices.length = 0;
+
+    // 2. Unload ALL existing chunks — clean slate
+    for (const key of [...this._chunks.keys()]) this._unloadChunk(key);
+
+    // 3. Generate full 3×3 without rendering (~40ms)
+    this._loadT0 = performance.now();
     for (let dy = -1; dy <= 1; dy++)
       for (let dx = -1; dx <= 1; dx++) {
-        const cx = mx + dx, cy = my + dy;
-        if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
-          this._loadChunk(cx, cy, false);
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy, false);
       }
-    this._syncChunkPool();
-    this._rerenderAllWithNeighbors();
-    this._dispatchCellChange();
+
+    // 4. Position + render 3×3 with full neighbor context
+    for (const entry of this._chunks.values()) {
+      entry.group.position.set(
+        (entry.mx - this._mx) * CHUNK_SIZE, 0,
+        (entry.my - this._my) * CHUNK_SIZE,
+      );
+    }
+    for (const [key, entry] of this._chunks) {
+      this._rerenderOne(key);
+      entry.group.visible = true;
+    }
+    console.log(`[load] 3×3 in ${(performance.now() - this._loadT0).toFixed(0)}ms`);
+
+    // 5. Place player with precise rendered elevation
     const centre = this._centreChunk;
     if (centre) {
       const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
       const elevFn = (tx, ty) => centre.renderer.elevationAt(tx, ty);
       this._playerState.place(spawn.x, spawn.y, elevFn);
+      this._playerView.playSpawnAnim();
       this._playerView.sync(this._playerState);
+      console.log(`[load] player placed at (${spawn.x}, ${spawn.y})`);
     }
+
+    // 6. Defer only the outer 16 — player can't reach them for ~9 seconds
+    let queued = 0;
+    for (let dy = -2; dy <= 2; dy++)
+      for (let dx = -2; dx <= 2; dx++) {
+        if (Math.abs(dx) <= 1 && Math.abs(dy) <= 1) continue;
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) { this._enqueueLoad(cx, cy); queued++; }
+      }
+    console.log(`[load] ${queued} outer chunks queued`);
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
@@ -285,6 +332,10 @@ export class MicroWorld {
   // Callback slot — set by Game to receive chunk-transition tile offsets
   // so FollowerManager can adjust follower positions in sync with the player.
   onChunkTransition = null;
+
+  // Fires once after _loadAndPlacePlayer completes (init or teleport).
+  // Used by the UI to trigger fade-from-black at the right moment.
+  onReady = null;
 
   // Optional perf hooks — set by Game to instrument subsystem timings.
   // Each should be a function(name) that returns an end() function.
@@ -436,9 +487,17 @@ export class MicroWorld {
       );
     }
     this._queueRerender(key);
+    // Queue rerenders for neighbors that aren't already visible.
+    // Visible chunks (e.g. centre) don't need repeated sync-rerenders every
+    // time a new neighbor loads — they'll get one final re-render via the
+    // normal gameplay rerender path when the player next crosses a boundary.
     for (let ddy = -1; ddy <= 1; ddy++)
-      for (let ddx = -1; ddx <= 1; ddx++)
-        if (ddx || ddy) this._queueRerender(`${mx+ddx},${my+ddy}`);
+      for (let ddx = -1; ddx <= 1; ddx++) {
+        if (!ddx && !ddy) continue;
+        const nbrKey = `${mx+ddx},${my+ddy}`;
+        const nbr = this._chunks.get(nbrKey);
+        if (nbr && !nbr.group.visible) this._queueRerender(nbrKey);
+      }
   }
 
   // Full synchronous load — used for centre chunk on init/teleport.
