@@ -110,7 +110,6 @@ export class FollowerVisuals {
       if (!vis) vis = this._create(f);
 
       const baseY = chunkRenderer ? chunkRenderer.elevationAt(f.px, f.py) : 0;
-      f.worldY = baseY + FOLLOWER_HEIGHT / 2; // used for sprite positioning
 
       // Position each part at its absolute world height
       vis.legMesh.position.set(  f.px, baseY + FL_LEG_H * 0.5,                              f.py);

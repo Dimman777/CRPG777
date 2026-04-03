@@ -139,15 +139,17 @@ export class FollowerManager {
 
   _makeFollower(char, slotIdx, sx, sz, hx, hz) {
     return {
+      // ── Identity (immutable) ──
       id:             `follower_${char.id}`,
       charId:         char.id,
       charData:       char,
       name:           char.name,
       color:          char.color,
+
+      // ── Simulation state (serializable) ──
       slot:           slotIdx,
       px:             sx,
       py:             sz,
-      worldY:         0,
       headingX:       hx,
       headingZ:       hz,
       legAngle:       Math.atan2(hx, hz),
@@ -160,14 +162,16 @@ export class FollowerManager {
       targetPx:       sx,
       targetPy:       sz,
       chatPartner:    null,
+      blockTimer:     0,
+      idleCol:        0,
+      idleRow:        0,
+
+      // ── Transient visual hints (not serialized — rebuilt from state) ──
       showBanter:     false,
       banterTimer:    0,
       showQuip:       false,
       quipText:       '',
       quipTimer:      0,
-      blockTimer:     0,
-      idleCol:        0,
-      idleRow:        0,
       ranLastTurn:    false,
     };
   }
