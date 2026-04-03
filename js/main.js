@@ -7,4 +7,4 @@ window._game = new Game();
 
 // Version stamp — bottom-right corner, verifiable at a glance.
 const el = document.getElementById('version-stamp');
-if (el) el.textContent = `${VERSION.label} ${VERSION.hash} (${VERSION.date})`;
+if (el) el.textContent = `${VERSION.label} b${VERSION.build}.${VERSION.hash}`;
