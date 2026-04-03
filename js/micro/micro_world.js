@@ -71,8 +71,17 @@ export class MicroWorld {
     // 3 more cover in-flight load-queue items.
     this._initPool(28);
 
-    // Load the initial 5×5 (centre synchronously, rest deferred), fix seams.
-    this._syncChunkPool();
+    // Load the inner 3×3 synchronously so the visible area is complete on
+    // frame 1 (no pop-in when the player first moves).  _syncChunkPool then
+    // defers only the outer ring (16 chunks) to the load queue.
+    const map = this._macroMap;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = this._mx + dx, cy = this._my + dy;
+        if (map.inBounds(cx, cy)) this._loadChunk(cx, cy);
+      }
+    }
+    this._syncChunkPool();       // positions all groups, defers outer ring
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
     if (centre) {
@@ -216,6 +225,14 @@ export class MicroWorld {
     my = Math.max(0, Math.min(map.height - 1, my));
     this._mx = mx;
     this._my = my;
+    // Load inner 3×3 synchronously so the destination is fully visible.
+    const m = this._macroMap;
+    for (let dy = -1; dy <= 1; dy++)
+      for (let dx = -1; dx <= 1; dx++) {
+        const cx = mx + dx, cy = my + dy;
+        if (m.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
+          this._loadChunk(cx, cy);
+      }
     this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     this._dispatchCellChange();
