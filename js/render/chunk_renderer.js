@@ -235,6 +235,13 @@ export class ChunkRenderer {
     this._pendingFvi      = 0;
     this._pendingWvi      = 0;
     this._pendingRowStart = 0;
+    // Hide meshes during incremental build — the floor buffer contains stale
+    // data from the previous chunk until all slices complete.  Three.js scans
+    // the entire position buffer for computeBoundingSphere(), and stale NaN
+    // values from a prior failed render trigger warnings.
+    this._floorMesh.visible = false;
+    this._wallMesh.visible  = false;
+    this._gridMesh.visible  = false;
   }
 
   // Process the next slice of rows. Returns true when done.

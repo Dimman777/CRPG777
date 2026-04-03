@@ -75,7 +75,10 @@ export class MicroWorld {
     this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
-    if (centre) this._player.place(32, 32, centre.renderer);
+    if (centre) {
+      const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
+      this._player.place(spawn.x, spawn.y, centre.renderer);
+    }
 
     this._dispatchCellChange();
   }
@@ -217,7 +220,10 @@ export class MicroWorld {
     this._rerenderAllWithNeighbors();
     this._dispatchCellChange();
     const centre = this._centreChunk;
-    if (centre) this._player.place(32, 32, centre.renderer);
+    if (centre) {
+      const spawn = this._findPassableTile(centre.grid, 32, 32) ?? { x: 32, y: 32 };
+      this._player.place(spawn.x, spawn.y, centre.renderer);
+    }
   }
 
   keyDown(key) { this._player?.keyDown(key); }
@@ -268,6 +274,28 @@ export class MicroWorld {
 
   applyConditions(conditions) { this.worldTags = conditions.map(c => c.tag); }
   hasTag(tag) { return this.worldTags.includes(tag); }
+
+  // ── Helpers ─────────────────────────────────────────────────────────────────
+
+  // Find the nearest passable tile to (cx, cy) via spiral search.
+  _findPassableTile(grid, cx, cy, maxRadius = 16) {
+    const S = CHUNK_SIZE;
+    if (cx >= 0 && cx < S && cy >= 0 && cy < S && grid.passable[cy * S + cx]) {
+      return { x: cx, y: cy };
+    }
+    for (let r = 1; r <= maxRadius; r++) {
+      for (let dy = -r; dy <= r; dy++) {
+        for (let dx = -r; dx <= r; dx++) {
+          if (Math.abs(dx) < r && Math.abs(dy) < r) continue;
+          const tx = cx + dx, ty = cy + dy;
+          if (tx >= 0 && tx < S && ty >= 0 && ty < S && grid.passable[ty * S + tx]) {
+            return { x: tx, y: ty };
+          }
+        }
+      }
+    }
+    return null;
+  }
 
   // ── Chunk pool ──────────────────────────────────────────────────────────────
 
@@ -377,7 +405,8 @@ export class MicroWorld {
 
     const { renderer, group } = this._acquireRenderer();
     if (renderNow) {
-      renderer.render(grid);
+      // Pass any already-loaded neighbor grids so diagonal corners don't get NaN.
+      renderer.render(grid, this._collectNeighbors(mx, my));
       group.visible = true;
     } else {
       group.visible = false;
