@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Chunk Performance Benchmark</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #111; color: #ccc; font: 13px/1.6 monospace; padding: 20px; }
+    h1 { color: #8f8; margin-bottom: 10px; font-size: 16px; }
+    h2 { color: #88f; margin: 16px 0 6px; font-size: 14px; }
+    .pass { color: #8f8; }
+    .warn { color: #fa0; }
+    .fail { color: #f44; }
+    #log { white-space: pre-wrap; }
+    button {
+      background: #2a4a2a; border: 1px solid #3a6a3a; color: #8f8;
+      padding: 6px 16px; cursor: pointer; font: inherit; margin: 10px 4px 10px 0;
+    }
+    table { border-collapse: collapse; margin: 8px 0; }
+    td, th { padding: 2px 12px 2px 0; text-align: right; }
+    th { color: #888; text-align: left; }
+    td:first-child, th:first-child { text-align: left; }
+  </style>
+</head>
+<body>
+  <h1>Chunk Performance Benchmark</h1>
+  <button id="btn-run">Run Benchmark</button>
+  <button id="btn-run-detail">Run Detailed (slower)</button>
+  <div id="log"></div>
+
+  <script type="importmap">
+    { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js" } }
+  </script>
+  <script type="module">
+    import * as THREE from 'three';
+    import { MacroMap }        from '../js/macro/macro_map.js';
+    import { MacroCell }       from '../js/macro/macro_cell.js';
+    import { WorldGen }        from '../js/macro/world_gen.js';
+    import { WorldPopulator }  from '../js/macro/world_populator.js';
+    import { ChunkGenerator }  from '../js/micro/chunk_gen.js';
+    import { ChunkRenderer }   from '../js/render/chunk_renderer.js';
+    import { CHUNK_SIZE }      from '../js/micro/micro_grid.js';
+
+    const log = document.getElementById('log');
+    function out(html) { log.innerHTML += html + '\n'; }
+    function cls() { log.innerHTML = ''; }
+
+    // ── Helpers ──────────────────────────────────────────────────────
+    function timeN(fn, n) {
+      const times = [];
+      for (let i = 0; i < n; i++) {
+        const t0 = performance.now();
+        fn(i);
+        times.push(performance.now() - t0);
+      }
+      times.sort((a, b) => a - b);
+      return {
+        min:    times[0],
+        max:    times[times.length - 1],
+        avg:    times.reduce((a, b) => a + b, 0) / times.length,
+        median: times[Math.floor(times.length / 2)],
+        p95:    times[Math.floor(times.length * 0.95)],
+        total:  times.reduce((a, b) => a + b, 0),
+        times,
+      };
+    }
+
+    function fmtMs(ms) { return ms.toFixed(2) + 'ms'; }
+    function colorMs(ms, threshWarn = 4, threshFail = 8) {
+      const cls = ms > threshFail ? 'fail' : ms > threshWarn ? 'warn' : 'pass';
+      return `<span class="${cls}">${fmtMs(ms)}</span>`;
+    }
+
+    function tableRow(label, stats, warn = 4, fail = 8) {
+      return `<tr>
+        <td>${label}</td>
+        <td>${colorMs(stats.avg, warn, fail)}</td>
+        <td>${colorMs(stats.median, warn, fail)}</td>
+        <td>${colorMs(stats.p95, warn, fail)}</td>
+        <td>${colorMs(stats.max, warn, fail)}</td>
+        <td>${colorMs(stats.min, warn, fail)}</td>
+        <td>${fmtMs(stats.total)}</td>
+      </tr>`;
+    }
+
+    const TABLE_HEAD = `<table><tr>
+      <th>Operation</th><th>Avg</th><th>Median</th><th>P95</th><th>Max</th><th>Min</th><th>Total</th>
+    </tr>`;
+
+    // ── World setup ─────────────────────────────────────────────────
+    function buildWorld(seed = 42) {
+      const wg = new WorldGen(seed);
+      const map = wg.generate(40, 40);
+      const pop = new WorldPopulator(seed);
+      pop.populate(map, wg);
+      return { map, seed };
+    }
+
+    // ── Benchmarks ──────────────────────────────────────────────────
+    function runBenchmark(detailed = false) {
+      cls();
+      out('Building world...');
+      const { map, seed } = buildWorld(42);
+      const gen = new ChunkGenerator(seed);
+
+      // Pick a variety of terrain types for testing
+      const testCells = [];
+      const terrainsSeen = new Set();
+      for (let y = 0; y < map.height && testCells.length < 20; y++) {
+        for (let x = 0; x < map.width && testCells.length < 20; x++) {
+          const cell = map.get(x, y);
+          if (cell && !terrainsSeen.has(cell.terrain)) {
+            terrainsSeen.add(cell.terrain);
+            testCells.push({ x, y, terrain: cell.terrain });
+          }
+          if (terrainsSeen.size >= 6 && testCells.length < 20) {
+            testCells.push({ x, y, terrain: cell?.terrain ?? '?' });
+          }
+        }
+      }
+
+      // ── 1. Chunk Generation ────────────────────────────────────────
+      out('\n<h2>1. Chunk Generation (ChunkGenerator.generate)</h2>');
+      const N_GEN = detailed ? 40 : 20;
+      const grids = [];
+
+      const genStats = timeN((i) => {
+        const c = testCells[i % testCells.length];
+        grids[i] = gen.generate(map, c.x, c.y);
+      }, N_GEN);
+      out(TABLE_HEAD + tableRow(`generate() x${N_GEN}`, genStats, 5, 10) + '</table>');
+
+      // Per-terrain breakdown
+      if (detailed) {
+        out('\nPer-terrain:');
+        let perTerrain = TABLE_HEAD;
+        for (const c of testCells.slice(0, 10)) {
+          const st = timeN(() => gen.generate(map, c.x, c.y), 5);
+          perTerrain += tableRow(`(${c.x},${c.y}) ${c.terrain}`, st, 5, 10);
+        }
+        out(perTerrain + '</table>');
+      }
+
+      // ── 1b. Two-phase Generation ────────────────────────────────────
+      out('<h2>1b. Two-Phase Generation (split across frames)</h2>');
+      const phase1Stats = timeN((i) => {
+        const c = testCells[i % testCells.length];
+        gen.generatePhase1(map, c.x, c.y);
+      }, N_GEN);
+      // Run phase1 once to get a partial for phase2 testing
+      const testPartial = gen.generatePhase1(map, testCells[0].x, testCells[0].y);
+      const phase2Stats = timeN(() => {
+        gen.generatePhase2({ ...testPartial, phase1Complete: false });
+      }, N_GEN);
+      out(TABLE_HEAD
+        + tableRow(`phase1 (elev+river) x${N_GEN}`, phase1Stats, 2, 5)
+        + tableRow(`phase2 (ground+obs) x${N_GEN}`, phase2Stats, 2, 5)
+        + '</table>');
+
+      // ── 2. Chunk Rendering (full) ──────────────────────────────────
+      out('<h2>2. Full Render (ChunkRenderer.render)</h2>');
+      const scene = new THREE.Group();
+      const renderer = new ChunkRenderer(scene);
+      const N_RENDER = detailed ? 20 : 10;
+
+      const renderStats = timeN((i) => {
+        renderer.render(grids[i % grids.length]);
+      }, N_RENDER);
+      out(TABLE_HEAD + tableRow(`render() x${N_RENDER}`, renderStats) + '</table>');
+
+      // ── 3. Render with neighbors ───────────────────────────────────
+      out('<h2>3. Render with Neighbors (seam fix)</h2>');
+      // Build a 3x3 grid set for a central cell
+      const cx = testCells[0].x, cy = testCells[0].y;
+      const centreGrid = gen.generate(map, cx, cy);
+      const nbrGrids = {};
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          if (!dx && !dy) continue;
+          const g = gen.generate(map, cx + dx, cy + dy);
+          if (g) nbrGrids[`${dx},${dy}`] = g;
+        }
+      }
+
+      const nbrStats = timeN(() => {
+        renderer.render(centreGrid, nbrGrids);
+      }, N_RENDER);
+      out(TABLE_HEAD + tableRow(`render(+nbr) x${N_RENDER}`, nbrStats) + '</table>');
+
+      // ── 4. Incremental render slices ───────────────────────────────
+      out('<h2>4. Incremental Render Slices</h2>');
+      for (const sliceRows of [32, 16, 8, 4]) {
+        const sliceTimings = [];
+        renderer.beginIncremental(centreGrid, nbrGrids);
+        let done = false;
+        while (!done) {
+          const t0 = performance.now();
+          done = renderer.renderSlice(sliceRows);
+          sliceTimings.push(performance.now() - t0);
+        }
+        sliceTimings.sort((a, b) => a - b);
+        const st = {
+          min: sliceTimings[0],
+          max: sliceTimings[sliceTimings.length - 1],
+          avg: sliceTimings.reduce((a,b) => a+b, 0) / sliceTimings.length,
+          median: sliceTimings[Math.floor(sliceTimings.length / 2)],
+          p95: sliceTimings[Math.floor(sliceTimings.length * 0.95)],
+          total: sliceTimings.reduce((a,b) => a+b, 0),
+        };
+        out(TABLE_HEAD + tableRow(`${sliceRows}-row slice (${sliceTimings.length} slices)`, st) + '</table>');
+      }
+
+      // ── 5. _buildFloor isolation ───────────────────────────────────
+      out('<h2>5. _buildFloor Isolation (full 64 rows)</h2>');
+      const floorStats = timeN(() => {
+        renderer._buildFloor(centreGrid, nbrGrids, 0, 64, 0, 0);
+        renderer._finishFloor();
+      }, N_RENDER);
+      out(TABLE_HEAD + tableRow(`_buildFloor x${N_RENDER}`, floorStats) + '</table>');
+
+      // ── 6. Obstacle + Grid ─────────────────────────────────────────
+      out('<h2>6. Grid + Obstacles</h2>');
+      // Ensure tileElev is populated
+      renderer._buildFloor(centreGrid, nbrGrids, 0, 64, 0, 0);
+      renderer._finishFloor();
+
+      const gridStats = timeN(() => renderer._buildGrid(centreGrid), N_RENDER);
+      const obsStats  = timeN(() => {
+        renderer._disposeObstacles();
+        renderer._buildObstacles(centreGrid);
+      }, N_RENDER);
+      out(TABLE_HEAD
+        + tableRow(`_buildGrid x${N_RENDER}`, gridStats, 1, 3)
+        + tableRow(`_buildObstacles x${N_RENDER}`, obsStats, 1, 3)
+        + '</table>');
+
+      // ── 7. Simulated border crossing ───────────────────────────────
+      out('<h2>7. Simulated Border Crossing (5 chunks, 8-row slices)</h2>');
+      const crossingGrids = [];
+      const crossingNbrs = [];
+      // Generate 5 chunks as if crossing east
+      for (let i = 0; i < 5; i++) {
+        const gx = cx + 2, gy = cy - 2 + i;
+        const g = gen.generate(map, gx, gy);
+        const n = {};
+        for (let dy = -1; dy <= 1; dy++)
+          for (let dx = -1; dx <= 1; dx++) {
+            if (!dx && !dy) continue;
+            const ng = gen.generate(map, gx+dx, gy+dy);
+            if (ng) n[`${dx},${dy}`] = ng;
+          }
+        crossingGrids.push(g);
+        crossingNbrs.push(n);
+      }
+
+      // Simulate: 5 two-phase generates + incremental renders at 8 rows/slice
+      const frameLog = [];
+      let frame = 0;
+
+      // Generation: 2 frames per chunk (phase1 + phase2)
+      const partials = [];
+      for (let i = 0; i < 5; i++) {
+        const gx = cx + 2, gy = cy - 2 + i;
+        let t0 = performance.now();
+        partials[i] = gen.generatePhase1(map, gx, gy);
+        frameLog.push({ frame: frame++, op: `gen1 chunk ${i}`, ms: performance.now() - t0 });
+        t0 = performance.now();
+        crossingGrids[i] = gen.generatePhase2(partials[i]);
+        frameLog.push({ frame: frame++, op: `gen2 chunk ${i}`, ms: performance.now() - t0 });
+      }
+
+      // Phase 2: incremental renders
+      const renderers = [];
+      for (let i = 0; i < 5; i++) {
+        const s = new THREE.Group();
+        const r = new ChunkRenderer(s);
+        renderers.push(r);
+      }
+
+      let chunkIdx = 0;
+      let currentRenderer = null;
+      while (chunkIdx < 5 || currentRenderer) {
+        const t0 = performance.now();
+        if (!currentRenderer && chunkIdx < 5) {
+          currentRenderer = renderers[chunkIdx];
+          currentRenderer.beginIncremental(crossingGrids[chunkIdx], crossingNbrs[chunkIdx]);
+        }
+        if (currentRenderer) {
+          const done = currentRenderer.renderSlice(8);
+          if (done) {
+            chunkIdx++;
+            currentRenderer = null;
+          }
+        }
+        frameLog.push({ frame: frame++, op: `slice`, ms: performance.now() - t0 });
+      }
+
+      const gen1Frames = frameLog.filter(f => f.op.startsWith('gen1'));
+      const gen2Frames = frameLog.filter(f => f.op.startsWith('gen2'));
+      const sliceFrames = frameLog.filter(f => f.op === 'slice');
+      out(`Total frames: ${frame}  (${gen1Frames.length} gen1 + ${gen2Frames.length} gen2 + ${sliceFrames.length} slices)`);
+      out(`Gen1  — avg: ${colorMs(gen1Frames.reduce((a,f) => a+f.ms, 0)/gen1Frames.length, 2, 4)}  max: ${colorMs(Math.max(...gen1Frames.map(f=>f.ms)), 2, 4)}`);
+      out(`Gen2  — avg: ${colorMs(gen2Frames.reduce((a,f) => a+f.ms, 0)/gen2Frames.length, 2, 4)}  max: ${colorMs(Math.max(...gen2Frames.map(f=>f.ms)), 2, 4)}`);
+      out(`Slice — avg: ${colorMs(sliceFrames.reduce((a,f) => a+f.ms, 0)/sliceFrames.length)}  max: ${colorMs(Math.max(...sliceFrames.map(f=>f.ms)))}`);
+      out(`Total compute: ${colorMs(frameLog.reduce((a,f) => a+f.ms, 0), 50, 150)}`);
+
+      // Cleanup
+      renderer.dispose();
+      for (const r of renderers) r.dispose();
+
+      out('\n<span class="pass">Done.</span>');
+    }
+
+    document.getElementById('btn-run').onclick = () => runBenchmark(false);
+    document.getElementById('btn-run-detail').onclick = () => runBenchmark(true);
+  </script>
+</body>
+</html>

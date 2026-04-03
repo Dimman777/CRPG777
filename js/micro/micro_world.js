@@ -48,6 +48,7 @@ export class MicroWorld {
     // first frame the player enters the 10-tile approach zone.
     this._loadQueue    = [];
     this._loadQueueSet = new Set();
+    this._pendingPhase2 = null; // deferred phase2 generation from previous frame
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -83,51 +84,55 @@ export class MicroWorld {
   update(dt, cameraController) {
     if (!this._player) return;
 
-    // Budget: each frame does EITHER chunk loads OR re-renders, not both.
-    // This caps per-frame work to one expensive operation (~7-14ms) rather
-    // than stacking two (~28ms spike).
+    // Budget: each frame does ONE of: chunk gen phase, re-render slice, or nothing.
     const _pb = this.perfBegin;
-    let didLoad = false;
+    let didWork = false;
 
-    if (this._loadQueue.length > 0) {
-      // One chunk load per frame — generation alone is ~7ms, so keep the budget tight.
-      {
-        const item = this._loadQueue.shift();
-        this._loadQueueSet.delete(item.key);
-        if (!this._chunks.has(item.key)) {
-          const _endLoad = _pb?.('chunkLoad');
-          this._loadChunk(item.mx, item.my, false);  // generate only, defer render
-          _endLoad?.();
-          didLoad = true;
-          const entry = this._chunks.get(item.key);
-          if (entry) {
-            entry.group.position.set(
-              (item.mx - this._mx) * CHUNK_SIZE,
-              0,
-              (item.my - this._my) * CHUNK_SIZE
-            );
-          }
-          this._queueRerender(item.key);
-          // Include diagonal neighbours: their outermost corners depend on the
-          // newly loaded chunk's elevation data via the dHash corner formula.
-          for (let ddy = -1; ddy <= 1; ddy++)
-            for (let ddx = -1; ddx <= 1; ddx++)
-              if (ddx || ddy) this._queueRerender(`${item.mx+ddx},${item.my+ddy}`);
+    // Two-phase chunk generation: phase1 (elevation+river) on one frame,
+    // phase2 (ground+obstacles) on the next, then queue for incremental render.
+    if (this._pendingPhase2) {
+      const p = this._pendingPhase2;
+      this._pendingPhase2 = null;
+      const _endLoad = _pb?.('chunkLoad');
+      const grid = this._chunkGen.generatePhase2(p.partial, this._overrides);
+      _endLoad?.();
+      if (grid) this._finishChunkLoad(p.mx, p.my, p.key, grid);
+      didWork = true;
+    } else if (this._loadQueue.length > 0) {
+      const item = this._loadQueue.shift();
+      this._loadQueueSet.delete(item.key);
+      if (!this._chunks.has(item.key)) {
+        const _endLoad = _pb?.('chunkLoad');
+        const partial = this._chunkGen.generatePhase1(this._macroMap, item.mx, item.my);
+        _endLoad?.();
+        if (partial) {
+          this._pendingPhase2 = { partial, mx: item.mx, my: item.my, key: item.key };
         }
+        didWork = true;
       }
     }
 
-    // Drain the deferred re-render queue: 1 chunk per frame.
-    // Skipped on frames that already did a chunk load to avoid stacking costs.
-    if (!didLoad && this._rerenderQueue.length > 0) {
+    // Process active incremental slices (1 slice per frame).
+    if (!this._activeSlices) this._activeSlices = [];
+    if (!didWork && this._activeSlices.length > 0) {
+      const slice = this._activeSlices[0];
+      slice.renderer.perfBegin = _pb;
+      const _endRR = _pb?.('rerender');
+      const done = slice.renderer.renderSlice(8);
+      _endRR?.();
+      slice.renderer.perfBegin = null;
+      if (done) {
+        this._activeSlices.shift();
+        const entry = this._chunks.get(slice.key);
+        if (entry) entry.group.visible = true;
+      }
+      didWork = true;
+    }
+    // Start new incremental rerenders when no slices are active.
+    else if (!didWork && this._activeSlices.length === 0 && this._rerenderQueue.length > 0) {
       const key = this._rerenderQueue.shift();
       this._rerenderSet.delete(key);
-      const _endRR = _pb?.('rerender');
-      this._rerenderOne(key);
-      _endRR?.();
-      // Make the chunk visible now that it has geometry (may have been deferred).
-      const entry = this._chunks.get(key);
-      if (entry) entry.group.visible = true;
+      this._rerenderIncremental(key);
     }
 
     const centre = this._centreChunk;
@@ -276,6 +281,7 @@ export class MicroWorld {
   _syncChunkPool() {
     const map = this._macroMap;
     const R   = 2; // half-width: 2 → 5×5 window
+    const _pb = this.perfBegin;
 
     // Build desired key set
     const desired = new Set();
@@ -287,9 +293,11 @@ export class MicroWorld {
     }
 
     // Unload chunks outside the window
+    const _endUnload = _pb?.('unload');
     for (const key of [...this._chunks.keys()]) {
       if (!desired.has(key)) this._unloadChunk(key);
     }
+    _endUnload?.();
 
     // Centre chunk must exist immediately (player is on it).
     const centreKey = `${this._mx},${this._my}`;
@@ -300,6 +308,7 @@ export class MicroWorld {
     }
 
     // Defer remaining missing chunks — inner ring first (closer = higher priority).
+    const _endEnqueue = _pb?.('enqueue');
     for (let ring = 1; ring <= R; ring++) {
       for (let dy = -ring; dy <= ring; dy++) {
         for (let dx = -ring; dx <= ring; dx++) {
@@ -311,8 +320,10 @@ export class MicroWorld {
         }
       }
     }
+    _endEnqueue?.();
 
     // Reposition all groups relative to the new centre
+    const _endRepos = _pb?.('reposition');
     for (const entry of this._chunks.values()) {
       entry.group.position.set(
         (entry.mx - this._mx) * CHUNK_SIZE,
@@ -320,6 +331,7 @@ export class MicroWorld {
         (entry.my - this._my) * CHUNK_SIZE
       );
     }
+    _endRepos?.();
 
     return newlyLoaded;
   }
@@ -338,9 +350,26 @@ export class MicroWorld {
     this._rerenderAllWithNeighbors();
   }
 
-  // renderNow: if true, immediately builds geometry (needed for the centre chunk
-  // the player is standing on).  If false, only generates the grid data and leaves
-  // the group hidden — the rerender queue will build geometry on a later frame.
+  // Place a fully generated grid into the chunk pool and queue it for rendering.
+  _finishChunkLoad(mx, my, key, grid) {
+    const { renderer, group } = this._acquireRenderer();
+    group.visible = false;  // stays hidden until rerender queue renders it
+    this._chunks.set(key, { renderer, group, grid, mx, my });
+    const entry = this._chunks.get(key);
+    if (entry) {
+      entry.group.position.set(
+        (mx - this._mx) * CHUNK_SIZE,
+        0,
+        (my - this._my) * CHUNK_SIZE
+      );
+    }
+    this._queueRerender(key);
+    for (let ddy = -1; ddy <= 1; ddy++)
+      for (let ddx = -1; ddx <= 1; ddx++)
+        if (ddx || ddy) this._queueRerender(`${mx+ddx},${my+ddy}`);
+  }
+
+  // Full synchronous load — used for centre chunk on init/teleport.
   _loadChunk(mx, my, renderNow = true) {
     const key  = `${mx},${my}`;
     const grid = this._chunkGen.generate(this._macroMap, mx, my, this._overrides);
@@ -351,7 +380,7 @@ export class MicroWorld {
       renderer.render(grid);
       group.visible = true;
     } else {
-      group.visible = false;  // stays hidden until rerender queue processes it
+      group.visible = false;
     }
     this._chunks.set(key, { renderer, group, grid, mx, my });
 
@@ -381,6 +410,10 @@ export class MicroWorld {
   _unloadChunk(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
+    // Cancel any in-progress incremental render for this chunk.
+    if (this._activeSlices) {
+      this._activeSlices = this._activeSlices.filter(s => s.key !== key);
+    }
     this._releaseRenderer(entry);  // clears obstacles, hides meshes, returns to pool
     this._chunks.delete(key);
   }
@@ -399,6 +432,7 @@ export class MicroWorld {
   }
 
   // Re-render a single chunk with its current neighbours (no-op if not in pool).
+  // Used by _rerenderAllWithNeighbors (init/teleport) where we want immediate results.
   _rerenderOne(key) {
     const entry = this._chunks.get(key);
     if (!entry) return;
@@ -406,6 +440,19 @@ export class MicroWorld {
     entry.renderer.perfBegin = this.perfBegin;
     entry.renderer.render(entry.grid, this._collectNeighbors(cx, cy));
     entry.renderer.perfBegin = null;
+  }
+
+  // Start an incremental re-render — floor is built in slices across frames.
+  _rerenderIncremental(key) {
+    const entry = this._chunks.get(key);
+    if (!entry) return;
+    const [cx, cy] = key.split(',').map(Number);
+    entry.renderer.perfBegin = this.perfBegin;
+    entry.renderer.beginIncremental(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.perfBegin = null;
+    // Track this renderer as having an active incremental render.
+    if (!this._activeSlices) this._activeSlices = [];
+    this._activeSlices.push({ key, renderer: entry.renderer });
   }
 
   // Add key to the deferred queue if it is in the pool and not already queued.

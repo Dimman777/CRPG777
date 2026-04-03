@@ -87,11 +87,19 @@ export class ChunkGenerator {
     this._riverEdgeElevCache = new Map();
   }
 
+  // Full generation in one call (used by init/teleport and the benchmark).
   generate(macroMap, mx, my, overrides = null) {
+    const partial = this.generatePhase1(macroMap, mx, my);
+    if (!partial) return null;
+    return this.generatePhase2(partial, overrides);
+  }
+
+  // Phase 1: slope + elevation + river — the terrain shape.
+  // Returns a partial result object to pass to generatePhase2.
+  generatePhase1(macroMap, mx, my) {
     const cell = macroMap.get(mx, my);
     if (!cell) return null;
 
-    // Collect 8 neighbours (null at map boundary)
     const nbr = {};
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
@@ -105,13 +113,26 @@ export class ChunkGenerator {
 
     if (cell.settlementType && cell.settlementType !== 'ruins') {
       this._buildSettlementChunk(grid, cell, nbr);
+      // Settlement chunks do everything in one pass — mark phase2 as done.
+      return { grid, cell, nbr, phase1Complete: true };
     } else if (cell.isFarmland) {
       this._buildFarmlandChunk(grid, cell, nbr);
+      return { grid, cell, nbr, phase1Complete: true };
     } else if (cell.isDock) {
       this._buildDockChunk(grid, cell, nbr);
-    } else {
-      this._buildElevation(grid, cell, nbr);
-      this._buildRiver(grid, cell, nbr);
+      return { grid, cell, nbr, phase1Complete: true };
+    }
+
+    this._buildElevation(grid, cell, nbr);
+    this._buildRiver(grid, cell, nbr);
+    return { grid, cell, nbr, phase1Complete: false };
+  }
+
+  // Phase 2: ground classification + obstacles + passability.
+  generatePhase2(partial, overrides = null) {
+    const { grid, cell, nbr, phase1Complete } = partial;
+
+    if (!phase1Complete) {
       this._classifyGround(grid, cell, nbr);
       this._placeObstacles(grid, cell, nbr);
       this._placeStamps2x2(grid, cell);
@@ -119,9 +140,8 @@ export class ChunkGenerator {
 
     this._buildPassability(grid);
 
-    // Apply per-tile overrides on top of procedural output.
     if (overrides) {
-      const patches = overrides.getChunk(mx, my);
+      const patches = overrides.getChunk(grid.macroX, grid.macroY);
       if (patches) {
         let needsPassability = false;
         for (const [idx, patch] of patches) {

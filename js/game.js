@@ -677,9 +677,7 @@ export class Game {
       endWorld();
 
       if (this._turnController.isActive) {
-        // Suppress formation AI; keep head-look alive for all followers
         this._followerMgr.updateIdleOnly(dt);
-        // Advance follower turns (no-op unless state === FOLLOWERS)
         this._turnController.tick(
           dt,
           this._followerMgr.followers,
@@ -688,14 +686,10 @@ export class Game {
           this.microWorld.centreRenderer,
         );
       } else {
-        const endFollower = perf.begin('followers');
         this._followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
-        endFollower();
       }
 
-      const endVis = perf.begin('followerVis');
       this._followerVis.sync(this._followerMgr.followers, this.microWorld.centreRenderer);
-      endVis();
 
       this._tilePanel.update(this.microWorld.getTileInfo());
       this._compass.update(this.cameraController.azimuth);
