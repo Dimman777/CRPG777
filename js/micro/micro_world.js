@@ -136,15 +136,8 @@ export class MicroWorld {
         this._activeSlices.shift();
         const entry = this._chunks.get(slice.key);
         if (entry) {
-          // Don't pop visible yet — batch all deferred chunks together
-          this._deferredReady.push(entry);
+          entry.group.visible = true;
           console.log(`[load] rendered (${entry.mx},${entry.my}) — ${this._rerenderQueue.length} rerender, ${this._activeSlices.length} slicing`);
-        }
-        // When all deferred work is done, make everything visible at once
-        if (this._activeSlices.length === 0 && this._rerenderQueue.length === 0 && this._loadQueue.length === 0 && !this._pendingPhase2) {
-          for (const e of this._deferredReady) e.group.visible = true;
-          console.log(`[load] all ${this._deferredReady.length} deferred chunks visible`);
-          this._deferredReady = [];
         }
       }
       didWork = true;
