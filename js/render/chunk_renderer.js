@@ -160,6 +160,7 @@ export class ChunkRenderer {
       new THREE.MeshLambertMaterial({ vertexColors: true }));
     this._floorMesh.castShadow = this._floorMesh.receiveShadow = true;
     this._floorMesh.frustumCulled = false;
+    this._floorMesh.visible = false; // hidden until first render() populates the buffer
     scene.add(this._floorMesh);
 
     // ── Walls — persistent max-size geometry + drawRange ─────────────────
@@ -180,6 +181,7 @@ export class ChunkRenderer {
       new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }));
     this._wallMesh.castShadow = this._wallMesh.receiveShadow = true;
     this._wallMesh.frustumCulled = false;
+    this._wallMesh.visible = false;
     scene.add(this._wallMesh);
 
     // ── Grid — persistent geometry ───────────────────────────────────────
