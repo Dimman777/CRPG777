@@ -1,8 +1,8 @@
 // Version stamp — shows in the bottom-right corner of the game.
 // BUILD is auto-incremented each commit. HASH is set to the git short hash.
 export const VERSION = {
-  build: 10,
-  hash:  'pr6',
+  build: 12,
+  hash:  'pr7-final',
   date:  '2026-04-02',
   label: 'CRPG777',
 };
