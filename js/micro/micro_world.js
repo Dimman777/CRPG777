@@ -225,14 +225,17 @@ export class MicroWorld {
   // Shared init/teleport sequence: unload stale chunks, load full 5×5,
   // re-render with neighbors, and place the player on a passable tile.
   _loadAndPlacePlayer() {
-    // Clear all deferred work — we're about to load everything synchronously.
+    this._syncChunkPool();             // unloads old chunks, enqueues new ones
+    // Clear ALL deferred work that syncChunkPool just enqueued — we're about
+    // to load the full 5×5 synchronously, so deferred loads would double-generate
+    // and destroy obstacles via re-render.
     this._loadQueue.length = 0;
     this._loadQueueSet.clear();
     this._pendingPhase2 = null;
     this._rerenderQueue.length = 0;
     this._rerenderSet.clear();
     if (this._activeSlices) this._activeSlices.length = 0;
-    this._syncChunkPool();             // unloads chunks outside the new 5×5 window
+    // Load full 5×5 synchronously (generate only, no render)
     const map = this._macroMap;
     for (let dy = -2; dy <= 2; dy++)
       for (let dx = -2; dx <= 2; dx++) {
@@ -240,6 +243,7 @@ export class MicroWorld {
         if (map.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`))
           this._loadChunk(cx, cy, false);
       }
+    // Render all at once with full neighbor context
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
     if (centre) {
