@@ -215,6 +215,8 @@ export class Game {
       }
     }
 
+    // Wire onReady BEFORE init — init fires onReady at the end of _loadAndPlacePlayer.
+    this.microWorld.onReady = () => { if (this._onReady) this._onReady(); };
     this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this._chunkOverrides);
     // Snap camera Y to starting elevation so it doesn't lerp from y=0.
     const startPos = this.microWorld.player?.position;
@@ -276,7 +278,6 @@ export class Game {
     };
 
     // Propagate chunk transitions to follower positions
-    this.microWorld.onReady = () => { if (this._onReady) this._onReady(); };
     this.microWorld.onChunkTransition = (dPx, dPy) => {
       this._followerMgr.onChunkTransition(dPx, dPy);
     };
