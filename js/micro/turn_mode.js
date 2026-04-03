@@ -8,6 +8,8 @@ import { TurnController } from './turn_controller.js';
 import { TurnHud }        from '../ui/turn_hud.js';
 import { ActionBar }      from '../ui/action_bar.js';
 
+const ANIM_DURATION = 0.15; // seconds per tile move
+
 export class TurnMode {
   /**
    * @param {Object} opts
@@ -32,6 +34,10 @@ export class TurnMode {
     this._actionMode        = 'none';
     this._facingAtTurnStart = 0;
     this._runTargets        = [];
+
+    // Movement animation — lerps entities between tiles over ANIM_DURATION seconds
+    this._anims    = [];    // [{ entity, fromX, fromZ, toX, toZ, elapsed }]
+    this._animBusy = false; // true while animations are playing (blocks input)
 
     // Highlight mesh pools
     this._runMids  = [];
@@ -82,17 +88,87 @@ export class TurnMode {
   // Call every frame
   update(dt) {
     const o = this._opts;
+
+    // Process movement animations
+    if (this._anims.length > 0) {
+      this._animBusy = true;
+      let allDone = true;
+      for (const a of this._anims) {
+        a.elapsed += dt;
+        const t = Math.min(1, a.elapsed / ANIM_DURATION);
+        // Smooth step for nicer feel
+        const s = t * t * (3 - 2 * t);
+        a.entity.px = a.fromX + (a.toX - a.fromX) * s;
+        a.entity.py = a.fromZ + (a.toZ - a.fromZ) * s;
+        if (t < 1) allDone = false;
+      }
+      if (allDone) {
+        // Snap to final positions
+        for (const a of this._anims) {
+          a.entity.px = a.toX;
+          a.entity.py = a.toZ;
+        }
+        this._anims = [];
+        this._animBusy = false;
+        // Refresh elevation after animation completes
+        const cr = o.getCentreRenderer();
+        if (cr) o.getPlayer()?.refresh(cr);
+      }
+    }
+
     if (this._tc.isActive) {
       o.followerMgr.updateIdleOnly(dt);
-      this._tc.tick(
-        dt,
-        o.getFollowers(),
-        o.getPlayer(),
-        o.getCentreGrid(),
-        o.getCentreRenderer(),
-      );
+      // Only tick turn controller when not animating (prevents next turn starting mid-lerp)
+      if (!this._animBusy) {
+        this._tc.tick(
+          dt,
+          o.getFollowers(),
+          o.getPlayer(),
+          o.getCentreGrid(),
+          o.getCentreRenderer(),
+        );
+      }
     }
     this._hud.update(this._tc, o.getFollowers(), this._actionMode, this._tc.playerRanLastTurn);
+  }
+
+  // Queue a movement animation for an entity (player or follower).
+  _animateMove(entity, fromX, fromZ, toX, toZ) {
+    this._anims.push({ entity, fromX, fromZ, toX, toZ, elapsed: 0 });
+  }
+
+  // Capture positions of player + followers, execute moveFn, then animate
+  // everyone from their old positions to their new positions.
+  _animatedAction(moveFn) {
+    if (this._animBusy) return false;
+    const o       = this._opts;
+    const player  = o.getPlayer();
+    const follows = o.getFollowers();
+
+    // Snapshot positions before the move
+    const oldPx = player.px, oldPz = player.py;
+    const oldFollowers = follows.map(f => ({ f, px: f.px, py: f.py }));
+
+    const result = moveFn();
+    if (!result) return false;
+
+    // Queue player animation if they moved
+    if (player.px !== oldPx || player.py !== oldPz) {
+      const newPx = player.px, newPz = player.py;
+      player.px = oldPx; player.py = oldPz; // reset to start
+      this._animateMove(player, oldPx, oldPz, newPx, newPz);
+    }
+
+    // Queue follower animations
+    for (const { f, px, py } of oldFollowers) {
+      if (f.px !== px || f.py !== py) {
+        const newPx = f.px, newPz = f.py;
+        f.px = px; f.py = py; // reset to start
+        this._animateMove(f, px, py, newPx, newPz);
+      }
+    }
+
+    return true;
   }
 
   toggle() {
@@ -261,6 +337,8 @@ export class TurnMode {
       const hit = input.tileFromEvent(e);
       if (!hit) return;
 
+      if (this._animBusy) return; // block input during animation
+
       if (this._actionMode === 'move' && !tc.playerRanLastTurn) {
         const player = o.getPlayer();
         const diffX  = hit.tx - Math.floor(player.px);
@@ -273,15 +351,14 @@ export class TurnMode {
         const savedAngle = player.legAngle;
         const savedHX    = player.headingX;
         const savedHZ    = player.headingZ;
-        const moved = tc.playerMove(
+        const moved = this._animatedAction(() => tc.playerMove(
           diffX, diffZ, player,
           o.getCentreGrid(), o.getCentreRenderer(), o.getFollowers(),
-        );
+        ));
         if (moved) {
           player.legAngle = savedAngle;
           player.headingX = savedHX;
           player.headingZ = savedHZ;
-          player.refresh(o.getCentreRenderer());
         } else {
           log('[Turn] Blocked.');
         }
@@ -299,10 +376,10 @@ export class TurnMode {
             log('[Turn] Click your tile (sudden) or the highlighted tile (gradual stop).');
             return;
           }
-          const moved = tc.playerMove(
+          const moved = this._animatedAction(() => tc.playerMove(
             diffX, diffZ, player,
             o.getCentreGrid(), o.getCentreRenderer(), o.getFollowers(),
-          );
+          ));
           if (moved) log('[Turn] Gradual stop.');
           else       log('[Turn] Blocked.');
         }
@@ -313,12 +390,12 @@ export class TurnMode {
           log('[Turn] Click a highlighted tile to run.');
           return;
         }
-        const ran = tc.playerRunTo(
+        const ran = this._animatedAction(() => tc.playerRunTo(
           o.getPlayer(),
           o.getCentreGrid(), o.getCentreRenderer(),
           target.tx, target.tz,
           o.getFollowers(),
-        );
+        ));
         if (!ran) log('[Turn] Run blocked.');
       }
     });
