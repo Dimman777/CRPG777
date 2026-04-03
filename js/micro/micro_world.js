@@ -100,24 +100,26 @@ export class MicroWorld {
     if (this._pendingPhase2) {
       const p = this._pendingPhase2;
       this._pendingPhase2 = null;
+      const _t = performance.now();
       const _endLoad = _pb?.('chunkLoad');
       const grid = this._chunkGen.generatePhase2(p.partial, this._overrides);
       _endLoad?.();
       if (grid) {
         this._finishChunkLoad(p.mx, p.my, p.key, grid);
-        console.log(`[load] gen2 (${p.mx},${p.my}) — ${this._loadQueue.length} queued`);
+        console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] gen2 (${p.mx},${p.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._loadQueue.length}q`);
       }
       didWork = true;
     } else if (this._loadQueue.length > 0) {
       const item = this._loadQueue.shift();
       this._loadQueueSet.delete(item.key);
       if (!this._chunks.has(item.key)) {
+        const _t = performance.now();
         const _endLoad = _pb?.('chunkLoad');
         const partial = this._chunkGen.generatePhase1(this._macroMap, item.mx, item.my);
         _endLoad?.();
         if (partial) {
           this._pendingPhase2 = { partial, mx: item.mx, my: item.my, key: item.key };
-          console.log(`[load] gen1 (${item.mx},${item.my}) — ${this._loadQueue.length} queued`);
+          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] gen1 (${item.mx},${item.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._loadQueue.length}q`);
         }
         didWork = true;
       }
@@ -128,6 +130,7 @@ export class MicroWorld {
     if (!didWork && this._activeSlices.length > 0) {
       const slice = this._activeSlices[0];
       slice.renderer.perfBegin = _pb;
+      const _t = performance.now();
       const _endRR = _pb?.('rerender');
       const done = slice.renderer.renderSlice(8);
       _endRR?.();
@@ -137,7 +140,7 @@ export class MicroWorld {
         const entry = this._chunks.get(slice.key);
         if (entry) {
           entry.group.visible = true;
-          console.log(`[load] rendered (${entry.mx},${entry.my}) — ${this._rerenderQueue.length} rerender, ${this._activeSlices.length} slicing`);
+          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] rendered (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._rerenderQueue.length}rr ${this._activeSlices.length}sl`);
         }
       }
       didWork = true;
@@ -148,9 +151,9 @@ export class MicroWorld {
       this._rerenderSet.delete(key);
       const entry = this._chunks.get(key);
       if (entry && entry.group.visible) {
-        // Already visible (e.g. centre chunk) — full synchronous re-render so
-        // obstacles are disposed+rebuilt in the same frame (no visible flash).
+        const _t = performance.now();
         this._rerenderOne(key);
+        console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] sync-rerender (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms`);
       } else {
         this._rerenderIncremental(key);
       }
@@ -257,7 +260,8 @@ export class MicroWorld {
     for (const key of [...this._chunks.keys()]) this._unloadChunk(key);
 
     // 3. Generate + render centre chunk only (~12ms)
-    const t0 = performance.now();
+    this._loadT0 = performance.now();
+    const t0 = this._loadT0;
     this._loadChunk(this._mx, this._my, true);
     const centre = this._centreChunk;
     if (centre) centre.group.position.set(0, 0, 0);
