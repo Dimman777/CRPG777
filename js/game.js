@@ -33,6 +33,7 @@ import { TurnHud }         from './ui/turn_hud.js';
 import { ActionBar }       from './ui/action_bar.js';
 import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
+import { RNG }             from './core/rng.js';
 import { PerfOverlay }     from './ui/perf_overlay.js';
 
 const GRID_W               = 10;
@@ -126,6 +127,7 @@ export class Game {
     window.addEventListener('keydown', this._onCameraKey);
 
     this._perf = new PerfOverlay();
+    this._rng  = null; // created in _initMacro from world seed
     this.started = true;
     this._initMacro();
     this._initMicro();
@@ -180,6 +182,10 @@ export class Game {
   _initExploration(opts = {}) {
     const SEED       = opts.seed      ?? 42;
     const NUM_FAULTS = opts.numFaults ?? 0;
+    // Master gameplay RNG — seeded from world seed so all gameplay randomness
+    // is deterministic from the same seed.  Cosmetic randomness (head-look etc.)
+    // still uses Math.random() and does not affect game state.
+    this._rng = new RNG(SEED ^ 0x47414D45); // "GAME" in hex, distinct from world-gen seed
     this._chunkOverrides = opts.chunkOverrides ?? new ChunkOverrides();
 
     // Use a pre-built map (from start screen or bitmap loader) if provided,
@@ -555,7 +561,7 @@ export class Game {
     this.cameraController.setFrustumHalf(8);
 
     // Followers
-    this._followerMgr    = new FollowerManager();
+    this._followerMgr    = new FollowerManager(this._rng);
     this._followerVis    = new FollowerVisuals(this.scene.scene);
     this._formationPanel = new FormationPanel(this._charSheet);
 
@@ -853,7 +859,7 @@ export class Game {
       for (const c of conditions) debug(`[Bridge] ${c.desc}`);
     }
 
-    this.combatMgr = new CombatManager([...teamA, ...teamB], GRID_W, GRID_H);
+    this.combatMgr = new CombatManager([...teamA, ...teamB], GRID_W, GRID_H, this._rng);
     this.combatMgr.setup();
     this.actorVisuals.reset();
     this._syncCombatVisuals();

@@ -8,10 +8,11 @@ const ACTION_COST   = 2;  // initiative penalty per action
 const MAX_ROUNDS    = 30; // safety limit
 
 export class CombatManager {
-  constructor(combatants, gridWidth = 10, gridHeight = 10) {
+  constructor(combatants, gridWidth = 10, gridHeight = 10, rng = null) {
     this.combatants = combatants;
     this.grid = new GridState(gridWidth, gridHeight);
-    this.initiative = new InitiativeQueue();
+    this.initiative = new InitiativeQueue(rng);
+    this._rng  = rng;
     this.round = 0;
     this._steps = 0;
     this.log = []; // action log strings
@@ -44,7 +45,7 @@ export class CombatManager {
     const actor  = this.initiative.current();
     const target = this.combatants.find(c => c.id === targetId);
     if (!actor || !target) return this._checkEnd();
-    const result = resolveMeleeAttack(actor, target);
+    const result = resolveMeleeAttack(actor, target, this._rng);
     if (result.success) {
       target.takeDamage(result.damage);
       this._log(`${actor.name} hits ${target.name} for ${result.damage} dmg `+
@@ -117,7 +118,7 @@ export class CombatManager {
 
     if (dist <= MELEE_RANGE) {
       // Attack
-      const result = resolveMeleeAttack(actor, target);
+      const result = resolveMeleeAttack(actor, target, this._rng);
       if (result.success) {
         target.takeDamage(result.damage);
         this._log(
