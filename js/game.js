@@ -7,8 +7,7 @@ import { ActorVisuals }      from './render/actor_visuals.js';
 import { CombatHud }    from './ui/combat_hud.js';
 import { MacroPanel }   from './ui/macro_panel.js';
 import { DialogueUI }   from './ui/dialogue_ui.js';
-import { Combatant }    from './combat/combatant.js';
-import { CombatManager } from './combat/combat_manager.js';
+import { CombatSession } from './combat/combat_session.js';
 import { MacroGame }    from './macro/macro_game.js';
 import { Faction }      from './macro/faction.js';
 import { Leader }       from './macro/leader.js';
@@ -16,8 +15,6 @@ import { Region }       from './macro/region.js';
 import { NPC, NPCManager }  from './micro/npc_manager.js';
 import { MicroWorld }       from './micro/micro_world.js';
 import { DialogueManager }  from './micro/dialogue_manager.js';
-import { getWorldConditions, applyWorldConditions } from './bridge/macro_to_micro.js';
-import { buildCombatConsequence }                   from './bridge/micro_to_macro.js';
 import { applyConsequence }                         from './bridge/consequence_mapper.js';
 import { WorldGen }        from './macro/world_gen.js';
 import { WorldPopulator }  from './macro/world_populator.js';
@@ -36,12 +33,9 @@ import { CHARACTERS, getCharacter } from './data/characters_data.js';
 import { RNG }             from './core/rng.js';
 import { PerfOverlay }     from './ui/perf_overlay.js';
 
-const GRID_W               = 10;
-const GRID_H               = 10;
-const COMBAT_INTERVAL      = 700;
 const MACRO_INTERVAL       = 2000;
 const PLAYER_FACTION       = 'a';
-const PLAYER_COMBATANT_ID  = 'a0'; // Aldric — the one fighter the player controls
+const PLAYER_COMBATANT_ID  = 'a0';
 const COMBAT_REGION        = 'r1';
 const MAX_COMMITMENT       = 5;
 const START_MANPOWER       = 8;
@@ -73,16 +67,13 @@ export class Game {
     this.combatHud       = null;
     this.macroPanel      = null;
     this.dialogueUI      = null;
-    this.combatMgr       = null;
     this.macroGame       = null;
     this.npcManager      = null;
     this.microWorld      = null;
     this.dialogueMgr     = null;
-    this._combatTimer    = null;
+    this._combatSession  = null;
     this._macroTimer     = null;
-    this._logIndex       = 0;
     this._macroLogIdx    = 0;
-    this._encounter      = 0;
     this._commitments    = { a: 1, b: 1 };
     this._followerMgr    = null;
     this._followerVis    = null;
@@ -843,116 +834,29 @@ export class Game {
   // ── Combat ─────────────────────────────────────────────────────────────────
 
   _startCombat() {
-    this._encounter++;
-    this._logIndex = 0;
-
-    const ca  = this._commitments.a;
-    const cb  = this._commitments.b;
-    const mpA = this.macroGame.factions.get('a').resources.manpower;
-    const mpB = this.macroGame.factions.get('b').resources.manpower;
-
-    const teamA = ROSTER.a.slice(0, ca).map((r, i) => new Combatant({
-      id: `a${i}`, name: r.name, factionId: 'a', stats: { ...r.stats },
-    }));
-    const teamB = ROSTER.b.slice(0, cb).map((r, i) => new Combatant({
-      id: `b${i}`, name: r.name, factionId: 'b', stats: { ...r.stats },
-    }));
-
-    // Bridge: macro → micro
-    const region     = this.macroGame.regions.get(COMBAT_REGION);
-    const conditions = getWorldConditions(region);
-    applyWorldConditions(conditions, teamA, teamB);
-    this.microWorld.applyConditions(conditions);
-
-    debug(`--- Encounter ${this._encounter}: ${ca}v${cb} in ${region.name} ---`);
-    debug(`    Iron Throne: ${mpA} men  |  Silver Council: ${mpB} men`);
-    if (conditions.length) {
-      for (const c of conditions) debug(`[Bridge] ${c.desc}`);
+    if (!this._combatSession) {
+      this._combatSession = new CombatSession({
+        macroGame:         this.macroGame,
+        commitments:       this._commitments,
+        roster:            ROSTER,
+        playerFactionId:   PLAYER_FACTION,
+        playerCombatantId: PLAYER_COMBATANT_ID,
+        regionId:          COMBAT_REGION,
+        rng:               this._rng,
+        microWorld:        this.microWorld,
+        onLog:             msg => debug(msg),
+        onVisualsSync:     cm => this._syncCombatVisuals(cm),
+        onPlayerTurn:      (name, opts, cb) => this.combatHud.showPlayerActions(name, opts, cb),
+        onHideActions:     () => this.combatHud.hidePlayerActions(),
+        onEnd:             (winner) => this._onCombatEnd(winner),
+      });
     }
-
-    this.combatMgr = new CombatManager([...teamA, ...teamB], GRID_W, GRID_H, this._rng);
-    this.combatMgr.setup();
     this.actorVisuals.reset();
-    this._syncCombatVisuals();
-    this._flushCombatLog();
-
-    this._combatTimer = setInterval(() => this._combatTick(), COMBAT_INTERVAL);
+    this._combatSession.start();
   }
 
-  _combatTick() {
-    const actor = this.combatMgr.initiative.current();
-
-    // Pause for player input when it's Aldric's turn and he's still alive
-    if (actor?.id === PLAYER_COMBATANT_ID && actor.isAlive()) {
-      clearInterval(this._combatTimer);
-      this._combatTimer = null;
-      this._syncCombatVisuals();
-      const options = this.combatMgr.getPlayerOptions();
-      this.combatHud.showPlayerActions(actor.name, options, a => this._onPlayerAction(a));
-      return;
-    }
-
-    const ongoing = this.combatMgr.step();
-    this._syncCombatVisuals();
-    this._flushCombatLog();
-    if (!ongoing) {
-      clearInterval(this._combatTimer);
-      this._onCombatEnd();
-    }
-  }
-
-  _onPlayerAction(action) {
-    this.combatHud.hidePlayerActions();
-
-    let ongoing;
-    if (action.type === 'attack') {
-      ongoing = this.combatMgr.playerAttack(action.targetId);
-    } else if (action.type === 'move') {
-      ongoing = this.combatMgr.playerMove(action.targetId);
-    } else {
-      ongoing = this.combatMgr.playerWait();
-    }
-
-    this._syncCombatVisuals();
-    this._flushCombatLog();
-
-    if (!ongoing) {
-      this._onCombatEnd();
-    } else {
-      // Resume AI turns
-      this._combatTimer = setInterval(() => this._combatTick(), COMBAT_INTERVAL);
-    }
-  }
-
-  _onCombatEnd() {
-    const { winnerFactionId } = this.combatMgr;
-    const loserFactionId = winnerFactionId === 'a' ? 'b' : 'a';
-    const victory = winnerFactionId === PLAYER_FACTION;
-
-    // Bridge: micro → macro
-    const consequence = buildCombatConsequence(
-      winnerFactionId, PLAYER_FACTION, COMBAT_REGION, this.macroGame.day
-    );
-    applyConsequence(consequence, this.macroGame);
+  _onCombatEnd(winnerFactionId) {
     this.macroPanel.update(this.macroGame);
-
-    // Loser escalates
-    const loserFaction = this.macroGame.factions.get(loserFactionId);
-    const canEscalate  = loserFaction.resources.manpower > 0 &&
-                         this._commitments[loserFactionId] < MAX_COMMITMENT;
-    if (canEscalate) {
-      this._commitments[loserFactionId]++;
-      loserFaction.resources.manpower--;
-      this.macroPanel.update(this.macroGame);
-    }
-
-    const newCount = this._commitments[loserFactionId];
-    const mpLeft   = loserFaction.resources.manpower;
-
-    debug(`[Bridge] ${victory ? 'Victory' : 'Defeat'} → consequences applied to Ashenvale.`);
-    if (canEscalate) {
-      debug(`[War]   ${loserFaction.name} commits another man (now ${newCount}, ${mpLeft} remaining).`);
-    }
 
     // Check war end
     const mpA = this.macroGame.factions.get('a').resources.manpower;
@@ -1028,18 +932,14 @@ export class Game {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  _syncCombatVisuals() {
-    const { combatants, grid, initiative } = this.combatMgr;
+  _syncCombatVisuals(cm) {
+    if (!cm) return;
+    const { combatants, grid, initiative } = cm;
     const active = initiative.current();
     this.gridVisuals.update(combatants, grid, active, PLAYER_COMBATANT_ID);
     this.actorVisuals.update(combatants, grid, active);
-    const last = this.combatMgr.log.at(-1) ?? '';
+    const last = cm.log.at(-1) ?? '';
     this.combatHud.update(combatants, initiative.getOrder(), last);
-  }
-
-  _flushCombatLog() {
-    const log = this.combatMgr.log;
-    while (this._logIndex < log.length) debug(log[this._logIndex++]);
   }
 
   _flushMacroLog() {
