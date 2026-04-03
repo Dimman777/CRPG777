@@ -36,6 +36,7 @@ export class MicroWorld {
     // Chunks queued for neighbour-aware re-render, processed 2 per frame in
     // update() to avoid a single-frame spike on boundary crossings.
     this._rerenderQueue = [];
+    this._rerenderSet   = new Set();
 
     // Pool of reusable {renderer, group} pairs — created once at init, never
     // constructed again during gameplay.  Eliminates the ~4.3M-iteration index
@@ -65,11 +66,11 @@ export class MicroWorld {
     this._mx = startMx;
     this._my = startMy;
 
-    // Pre-create 12 renderer+group pairs.  9 are needed for the active 3×3 window;
-    // 3 more cover chunks that are preloaded ahead before the player crosses an edge.
-    this._initPool(12);
+    // Pre-create 28 renderer+group pairs.  25 are needed for the active 5×5 window;
+    // 3 more cover in-flight load-queue items.
+    this._initPool(28);
 
-    // Load the initial 3×3, fix seams, then place player at centre
+    // Load the initial 5×5 (centre synchronously, rest deferred), fix seams.
     this._syncChunkPool();
     this._rerenderAllWithNeighbors();
     const centre = this._centreChunk;
@@ -82,37 +83,51 @@ export class MicroWorld {
   update(dt, cameraController) {
     if (!this._player) return;
 
-    // Process one deferred chunk load per frame.  Preloading is queued here
-    // rather than executed synchronously so the cost is spread across many
-    // frames before the player reaches the chunk edge (Jolt 1 fix).
+    // Budget: each frame does EITHER chunk loads OR re-renders, not both.
+    // This caps per-frame work to one expensive operation (~7-14ms) rather
+    // than stacking two (~28ms spike).
+    const _pb = this.perfBegin;
+    let didLoad = false;
+
     if (this._loadQueue.length > 0) {
-      const item = this._loadQueue.shift();
-      this._loadQueueSet.delete(item.key);
-      if (!this._chunks.has(item.key)) {
-        this._loadChunk(item.mx, item.my);
-        const entry = this._chunks.get(item.key);
-        if (entry) {
-          entry.group.position.set(
-            (item.mx - this._mx) * CHUNK_SIZE,
-            0,
-            (item.my - this._my) * CHUNK_SIZE
-          );
+      // One chunk load per frame — generation alone is ~7ms, so keep the budget tight.
+      {
+        const item = this._loadQueue.shift();
+        this._loadQueueSet.delete(item.key);
+        if (!this._chunks.has(item.key)) {
+          const _endLoad = _pb?.('chunkLoad');
+          this._loadChunk(item.mx, item.my, false);  // generate only, defer render
+          _endLoad?.();
+          didLoad = true;
+          const entry = this._chunks.get(item.key);
+          if (entry) {
+            entry.group.position.set(
+              (item.mx - this._mx) * CHUNK_SIZE,
+              0,
+              (item.my - this._my) * CHUNK_SIZE
+            );
+          }
+          this._queueRerender(item.key);
+          // Include diagonal neighbours: their outermost corners depend on the
+          // newly loaded chunk's elevation data via the dHash corner formula.
+          for (let ddy = -1; ddy <= 1; ddy++)
+            for (let ddx = -1; ddx <= 1; ddx++)
+              if (ddx || ddy) this._queueRerender(`${item.mx+ddx},${item.my+ddy}`);
         }
-        this._queueRerender(item.key);
-        // Include diagonal neighbours: their outermost corners depend on the
-        // newly loaded chunk's elevation data via the dHash corner formula.
-        for (let ddy = -1; ddy <= 1; ddy++)
-          for (let ddx = -1; ddx <= 1; ddx++)
-            if (ddx || ddy) this._queueRerender(`${item.mx+ddx},${item.my+ddy}`);
       }
     }
 
-    // Drain the deferred re-render queue: 2 chunks per frame maximum.
-    // This spreads the neighbour-seam fix work across several frames so
-    // no single frame bears the cost of re-rendering all 9 chunks at once.
-    if (this._rerenderQueue.length > 0) {
-      const batch = this._rerenderQueue.splice(0, 2);
-      for (const key of batch) this._rerenderOne(key);
+    // Drain the deferred re-render queue: 1 chunk per frame.
+    // Skipped on frames that already did a chunk load to avoid stacking costs.
+    if (!didLoad && this._rerenderQueue.length > 0) {
+      const key = this._rerenderQueue.shift();
+      this._rerenderSet.delete(key);
+      const _endRR = _pb?.('rerender');
+      this._rerenderOne(key);
+      _endRR?.();
+      // Make the chunk visible now that it has geometry (may have been deferred).
+      const entry = this._chunks.get(key);
+      if (entry) entry.group.visible = true;
     }
 
     const centre = this._centreChunk;
@@ -138,27 +153,30 @@ export class MicroWorld {
       if (nmx !== this._mx || nmy !== this._my) {
         this._mx = nmx;
         this._my = nmy;
+        const _endSync = _pb?.('chunkSync');
         const newlyLoaded = this._syncChunkPool();
+        _endSync?.();
 
-        // Only re-render chunks whose neighbour relationships actually changed:
-        //   • The 3 newly loaded chunks — first render had no full neighbour context.
-        //   • The centre chunk — safety fix in case its leading edge was not preloaded.
-        // The 6 chunks that were already in the pool and are not on the new leading
-        // edge retain their existing renders: their visible seams did not change.
-        this._rerenderQueue = [];
-        const centreKey = `${this._mx},${this._my}`;
-        for (const key of newlyLoaded) {
-          this._queueRerender(key);
-          // Also queue already-loaded diagonal neighbours of each new chunk:
-          // their outermost corners change now that they have a new diagonal peer.
-          const [kx, ky] = key.split(',').map(Number);
-          for (let ddy = -1; ddy <= 1; ddy++)
-            for (let ddx = -1; ddx <= 1; ddx++)
-              if (ddx || ddy) this._queueRerender(`${kx+ddx},${ky+ddy}`);
+        // With a 5×5 pool, a normal 1-step crossing means the new centre and
+        // its 3×3 neighbors were already loaded and rendered with full neighbor
+        // context.  Only newly loaded chunks (outer ring, deferred) and their
+        // neighbors need re-rendering — and those are queued naturally when the
+        // load queue processes them.  No need to clear or rebuild the queue here.
+        // Only queue re-renders for chunks that were synchronously loaded (rare —
+        // only happens if the centre was missing, e.g. teleport or map edge).
+        if (newlyLoaded.length > 0) {
+          for (const key of newlyLoaded) {
+            this._queueRerender(key);
+            const [kx, ky] = key.split(',').map(Number);
+            for (let ddy = -1; ddy <= 1; ddy++)
+              for (let ddx = -1; ddx <= 1; ddx++)
+                if (ddx || ddy) this._queueRerender(`${kx+ddx},${ky+ddy}`);
+          }
         }
-        this._queueRerender(centreKey); // no-op if centreKey is already queued
 
+        const _endEvt = _pb?.('cellEvent');
         this._dispatchCellChange();
+        _endEvt?.();
       }
 
       // Notify followers of the same px/py adjustment applied to the player
@@ -167,20 +185,15 @@ export class MicroWorld {
       this._player.px = epx;
       this._player.py = epy;
       if ((dPx !== 0 || dPy !== 0) && this.onChunkTransition) {
+        const _endFT = _pb?.('followerShift');
         this.onChunkTransition(dPx, dPy);
+        _endFT?.();
       }
       const newCentre = this._centreChunk;
       this._player.refresh(newCentre?.renderer);
-    } else {
-      // Pre-load chunks ahead of the player before they reach the edge
-      const px = this._player.px, py = this._player.py;
-      const S  = CHUNK_SIZE;
-      const T  = 10; // tile threshold for pre-loading
-      if (px < T)       this._preloadEdge('west');
-      if (px > S - T)   this._preloadEdge('east');
-      if (py < T)       this._preloadEdge('north');
-      if (py > S - T)   this._preloadEdge('south');
     }
+    // No explicit preload needed — the 5×5 window ensures chunks one ring beyond
+    // the visible 3×3 are already loading/loaded via the deferred queue.
 
     const pos = this._player.position;
     if (cameraController) cameraController.setTarget(pos.x, pos.y, pos.z);
@@ -223,6 +236,10 @@ export class MicroWorld {
   // so FollowerManager can adjust follower positions in sync with the player.
   onChunkTransition = null;
 
+  // Optional perf hooks — set by Game to instrument subsystem timings.
+  // Each should be a function(name) that returns an end() function.
+  perfBegin = null;
+
   // Returns micro-tile data for the player's current standing tile, or null.
   getTileInfo() {
     const centre = this._centreChunk;
@@ -251,15 +268,19 @@ export class MicroWorld {
 
   get _centreChunk() { return this._chunks.get(`${this._mx},${this._my}`); }
 
-  // Load missing chunks in the 3×3 window, unload those outside it,
+  // Load missing chunks in the 5×5 window, unload those outside it,
   // then reposition every group so the centre is at world origin.
+  // Only the centre chunk is loaded synchronously (the player is standing on it).
+  // Other missing chunks are deferred to the load queue — inner ring (3×3) first,
+  // then outer ring, so the nearest chunks render soonest.
   _syncChunkPool() {
     const map = this._macroMap;
+    const R   = 2; // half-width: 2 → 5×5 window
 
     // Build desired key set
     const desired = new Set();
-    for (let dy = -1; dy <= 1; dy++) {
-      for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -R; dy <= R; dy++) {
+      for (let dx = -R; dx <= R; dx++) {
         const cx = this._mx + dx, cy = this._my + dy;
         if (map.inBounds(cx, cy)) desired.add(`${cx},${cy}`);
       }
@@ -270,24 +291,33 @@ export class MicroWorld {
       if (!desired.has(key)) this._unloadChunk(key);
     }
 
-    // Load chunks not yet in pool; collect which keys were actually loaded so
-    // the caller can target re-renders precisely rather than refreshing all 9.
+    // Centre chunk must exist immediately (player is on it).
+    const centreKey = `${this._mx},${this._my}`;
     const newlyLoaded = [];
-    for (const key of desired) {
-      if (!this._chunks.has(key)) {
-        const [cx, cy] = key.split(',').map(Number);
-        this._loadChunk(cx, cy);
-        newlyLoaded.push(key);
+    if (!this._chunks.has(centreKey)) {
+      this._loadChunk(this._mx, this._my);
+      newlyLoaded.push(centreKey);
+    }
+
+    // Defer remaining missing chunks — inner ring first (closer = higher priority).
+    for (let ring = 1; ring <= R; ring++) {
+      for (let dy = -ring; dy <= ring; dy++) {
+        for (let dx = -ring; dx <= ring; dx++) {
+          if (Math.abs(dx) < ring && Math.abs(dy) < ring) continue; // skip inner rings
+          const cx = this._mx + dx, cy = this._my + dy;
+          if (map.inBounds(cx, cy) && !this._chunks.has(`${cx},${cy}`)) {
+            this._enqueueLoad(cx, cy);
+          }
+        }
       }
     }
 
     // Reposition all groups relative to the new centre
-    for (const [key, entry] of this._chunks) {
-      const [cx, cy] = key.split(',').map(Number);
+    for (const entry of this._chunks.values()) {
       entry.group.position.set(
-        (cx - this._mx) * CHUNK_SIZE,
+        (entry.mx - this._mx) * CHUNK_SIZE,
         0,
-        (cy - this._my) * CHUNK_SIZE
+        (entry.my - this._my) * CHUNK_SIZE
       );
     }
 
@@ -308,21 +338,27 @@ export class MicroWorld {
     this._rerenderAllWithNeighbors();
   }
 
-  _loadChunk(mx, my) {
+  // renderNow: if true, immediately builds geometry (needed for the centre chunk
+  // the player is standing on).  If false, only generates the grid data and leaves
+  // the group hidden — the rerender queue will build geometry on a later frame.
+  _loadChunk(mx, my, renderNow = true) {
     const key  = `${mx},${my}`;
     const grid = this._chunkGen.generate(this._macroMap, mx, my, this._overrides);
     if (!grid) return;
 
     const { renderer, group } = this._acquireRenderer();
-    renderer.render(grid);
-    group.visible = true;
-    this._chunks.set(key, { renderer, group, grid });
+    if (renderNow) {
+      renderer.render(grid);
+      group.visible = true;
+    } else {
+      group.visible = false;  // stays hidden until rerender queue processes it
+    }
+    this._chunks.set(key, { renderer, group, grid, mx, my });
 
-    // River elevation propagation: after caching this chunk's riverZ, reload any
-    // already-loaded downstream river chunks so they pick up the upstream constraint
-    // we just added to the cache.  This fixes the generation-order problem where a
-    // downstream chunk was generated before its upstream neighbour was available.
-    // Propagation recurses downstream until it runs out of loaded river chunks.
+    // River elevation propagation: queue downstream river chunks for regeneration
+    // rather than recursively reloading them in the same frame.  The downstream
+    // chunks will pick up the upstream riverZ constraint from the cache when the
+    // load queue processes them on a later frame.
     const cell = this._macroMap.get(mx, my);
     if (cell?.riverMask) {
       const downDir = cell.riverDownDir ?? 0;
@@ -332,22 +368,11 @@ export class MicroWorld {
         const [dx, dy] = DOWN_DELTA[bit];
         const dnKey = `${mx + dx},${my + dy}`;
         if (this._chunks.has(dnKey)) {
-          // Downstream chunk exists but was generated without our cached riverZ.
-          // Unload + regenerate it; the recursive _loadChunk call will again
-          // propagate further downstream if needed.
+          // Downstream chunk needs regeneration — unload it and enqueue a fresh load
+          // so it picks up our newly cached riverZ.  Deferred to the load queue so
+          // we never cascade multiple generates into a single frame.
           this._unloadChunk(dnKey);
-          this._loadChunk(mx + dx, my + dy);
-          // Restore the correct world position immediately.  _loadChunk creates a
-          // new THREE.Group at (0,0,0); without this the reloaded chunk visually
-          // overlaps whatever chunk sits at world origin until the next full sync.
-          const dnEntry = this._chunks.get(dnKey);
-          if (dnEntry) {
-            dnEntry.group.position.set(
-              (mx + dx - this._mx) * CHUNK_SIZE,
-              0,
-              (my + dy - this._my) * CHUNK_SIZE
-            );
-          }
+          this._enqueueLoad(mx + dx, my + dy);
         }
       }
     }
@@ -378,13 +403,16 @@ export class MicroWorld {
     const entry = this._chunks.get(key);
     if (!entry) return;
     const [cx, cy] = key.split(',').map(Number);
+    entry.renderer.perfBegin = this.perfBegin;
     entry.renderer.render(entry.grid, this._collectNeighbors(cx, cy));
+    entry.renderer.perfBegin = null;
   }
 
   // Add key to the deferred queue if it is in the pool and not already queued.
   _queueRerender(key) {
-    if (this._chunks.has(key) && !this._rerenderQueue.includes(key)) {
+    if (this._chunks.has(key) && !this._rerenderSet.has(key)) {
       this._rerenderQueue.push(key);
+      this._rerenderSet.add(key);
     }
   }
 
@@ -393,6 +421,7 @@ export class MicroWorld {
   // refresh is required.  Clears any pending deferred queue.
   _rerenderAllWithNeighbors() {
     this._rerenderQueue = [];
+    this._rerenderSet.clear();
     for (const key of this._chunks.keys()) this._rerenderOne(key);
   }
 

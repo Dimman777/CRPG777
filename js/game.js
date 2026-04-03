@@ -33,6 +33,7 @@ import { TurnHud }         from './ui/turn_hud.js';
 import { ActionBar }       from './ui/action_bar.js';
 import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
+import { PerfOverlay }     from './ui/perf_overlay.js';
 
 const GRID_W               = 10;
 const GRID_H               = 10;
@@ -122,6 +123,7 @@ export class Game {
       if (e.key === 'e' || e.key === 'E') this.cameraController.rotateRight();
     });
 
+    this._perf = new PerfOverlay();
     this.started = true;
     this._initMacro();
     this._initMicro();
@@ -214,6 +216,12 @@ export class Game {
     }
 
     this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this._chunkOverrides);
+    // Snap camera Y to starting elevation so it doesn't lerp from y=0.
+    const startPos = this.microWorld.player?.position;
+    if (startPos && this.cameraController) {
+      this.cameraController.setTarget(startPos.x, startPos.y, startPos.z);
+      this.cameraController.snapY();
+    }
 
     // Location HUD — shows macro-cell info beside the macro simulation panel.
     this._locationPanel = new LocationPanel();
@@ -230,6 +238,12 @@ export class Game {
     // Teleport from macro map "Go Here" button
     window.addEventListener('goToCell', e => {
       this.microWorld.teleportTo(e.detail.mx, e.detail.my);
+      // Snap camera Y so it doesn't lerp from the old elevation after a long teleport.
+      const p = this.microWorld.player?.position;
+      if (p && this.cameraController) {
+        this.cameraController.setTarget(p.x, p.y, p.z);
+        this.cameraController.snapY();
+      }
     });
 
     // WASD / Z / C — disabled in turn mode (mouse + buttons used instead); Space — toggle turn
@@ -638,6 +652,9 @@ export class Game {
 
     // Per-frame update — real-time or turn mode
     this.rendering.onUpdate = dt => {
+      const perf = this._perf;
+      perf.frameStart();
+
       // Apply mouse-driven movement (free roam only).
       if (_rmouseDown && !this._turnController?.isActive) {
         const p = this.microWorld.player;
@@ -654,7 +671,10 @@ export class Game {
 
       // microWorld.update() is safe in turn mode: all keys are false so the
       // player won't move, but head-look and terrain-snap still run.
+      this.microWorld.perfBegin = (name) => perf.begin(name);
+      const endWorld = perf.begin('microWorld');
       this.microWorld.update(dt, this.cameraController);
+      endWorld();
 
       if (this._turnController.isActive) {
         // Suppress formation AI; keep head-look alive for all followers
@@ -668,13 +688,20 @@ export class Game {
           this.microWorld.centreRenderer,
         );
       } else {
+        const endFollower = perf.begin('followers');
         this._followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
+        endFollower();
       }
 
+      const endVis = perf.begin('followerVis');
       this._followerVis.sync(this._followerMgr.followers, this.microWorld.centreRenderer);
+      endVis();
+
       this._tilePanel.update(this.microWorld.getTileInfo());
       this._compass.update(this.cameraController.azimuth);
       this._turnHud.update(this._turnController, this._followerMgr.followers, this._actionMode, this._turnController.playerRanLastTurn);
+
+      perf.frameEnd();
     };
   }
 

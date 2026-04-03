@@ -59,6 +59,20 @@ const OBS_COLOR = [
 ];
 
 // ----------------------------------------------------------------
+// Module-level obstacle geometry + material pool — created once, shared by all
+// ChunkRenderers.  Eliminates per-render dispose/recreate churn that causes
+// periodic GC pauses and GPU object thrash.
+// ----------------------------------------------------------------
+const _OBS_GEO_POOL = [];
+const _OBS_MAT_POOL = [];
+for (let i = 0; i < OBS_GEO.length; i++) {
+  if (!OBS_GEO[i]) { _OBS_GEO_POOL.push(null); _OBS_MAT_POOL.push(null); continue; }
+  const [sw, sh, sd] = OBS_GEO[i];
+  _OBS_GEO_POOL.push(new THREE.BoxGeometry(sw, sh, sd));
+  _OBS_MAT_POOL.push(new THREE.MeshLambertMaterial({ color: OBS_COLOR[i] }));
+}
+
+// ----------------------------------------------------------------
 // Module-level geometry sizing constants
 // ----------------------------------------------------------------
 const _S    = CHUNK_SIZE;   // 64
@@ -179,7 +193,15 @@ export class ChunkRenderer {
     this._gridMesh.visible = false;
     this._gridVisible = false;
     scene.add(this._gridMesh);
+
+    // ── Pre-allocated per-tile scratch buffers (reused across render calls) ──
+    this._H        = new Float32Array(_M * _M);
+    this._COL      = new Float32Array(_M * _M * 3);
+    this._tileElevBuf = new Float32Array(_S * _S);
   }
+
+  // Optional perf hook — set externally for sub-operation timing.
+  perfBegin = null;
 
   // Update geometry in-place; only obstacle meshes are recreated.
   render(grid, nbrGrids = {}) {
@@ -189,9 +211,10 @@ export class ChunkRenderer {
     this._wallMesh.visible  = true;
     this._gridMesh.visible  = this._gridVisible;
     this._grid = grid;
-    this._buildFloor(grid, nbrGrids);
-    this._buildGrid(grid);
-    this._buildObstacles(grid);
+    const _pb = this.perfBegin;
+    const _ef = _pb?.('floor'); this._buildFloor(grid, nbrGrids); _ef?.();
+    const _eg = _pb?.('grid');  this._buildGrid(grid);            _eg?.();
+    const _eo = _pb?.('obstacles'); this._buildObstacles(grid);   _eo?.();
   }
 
   // Return this renderer to the MicroWorld pool without disposing its geometry.
@@ -240,8 +263,9 @@ export class ChunkRenderer {
   _disposeObstacles() {
     for (const m of this._obsMeshes) {
       this._scene.remove(m);
-      m.geometry?.dispose();
-      m.material?.dispose();
+      // Geometry and material are shared module-level pools — do NOT dispose them.
+      // Only dispose the instance matrix buffer unique to this InstancedMesh.
+      m.dispose();
     }
     this._obsMeshes = [];
   }
@@ -261,6 +285,12 @@ export class ChunkRenderer {
     const cl = (v, lo, hi) => v < lo ? lo : v > hi ? hi : v;
     const elevOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.elevation[ty * S + tx];
+      // Diagonal corners — must check before cardinal edges to avoid OOB indexing
+      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].elevation[(S-1) * S + (S-1)];
+      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].elevation[(S-1) * S];
+      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].elevation[S-1];
+      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].elevation[0];
+      // Cardinal edges
       if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].elevation[ty * S + (S-1)];
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].elevation[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].elevation[(S-1) * S + tx];
@@ -269,6 +299,12 @@ export class ChunkRenderer {
     };
     const groundOf = (tx, ty) => {
       if (tx >= 0 && tx < S && ty >= 0 && ty < S) return grid.ground[ty * S + tx];
+      // Diagonal corners
+      if (tx <  0 && ty <  0 && nbrGrids['-1,-1']) return nbrGrids['-1,-1'].ground[(S-1) * S + (S-1)];
+      if (tx >= S && ty <  0 && nbrGrids[ '1,-1']) return nbrGrids[ '1,-1'].ground[(S-1) * S];
+      if (tx <  0 && ty >= S && nbrGrids['-1,1'])  return nbrGrids['-1,1'].ground[S-1];
+      if (tx >= S && ty >= S && nbrGrids[ '1,1'])  return nbrGrids[ '1,1'].ground[0];
+      // Cardinal edges
       if (tx <  0 && nbrGrids['-1,0']) return nbrGrids['-1,0'].ground[ty * S + (S-1)];
       if (tx >= S && nbrGrids[ '1,0']) return nbrGrids[ '1,0'].ground[ty * S];
       if (ty <  0 && nbrGrids['0,-1']) return nbrGrids['0,-1'].ground[(S-1) * S + tx];
@@ -353,10 +389,10 @@ export class ChunkRenderer {
       wvi += 4;
     };
 
-    // Per-tile scratch (tiny — no meaningful allocation cost)
-    const H   = new Float32Array(M * M);
-    const COL = new Float32Array(M * M * 3);
-    const tileElev = new Float32Array(S * S);
+    // Per-tile scratch — pre-allocated on the instance, zero-filled each render
+    const H   = this._H;
+    const COL = this._COL;
+    const tileElev = this._tileElevBuf;
 
     // ── Main tile loop ───────────────────────────────────────────────────
     for (let ty = 0; ty < S; ty++) {
@@ -655,9 +691,9 @@ export class ChunkRenderer {
     for (let obsType = 1; obsType < OBS_GEO.length; obsType++) {
       const list = buckets[obsType];
       if (!list.length || !OBS_GEO[obsType]) continue;
-      const [sw, sh, sd] = OBS_GEO[obsType];
-      const geo  = new THREE.BoxGeometry(sw, sh, sd);
-      const mat  = new THREE.MeshLambertMaterial({ color: OBS_COLOR[obsType] });
+      const geo  = _OBS_GEO_POOL[obsType];
+      const mat  = _OBS_MAT_POOL[obsType];
+      const sh   = OBS_GEO[obsType][1]; // height — needed for Y offset
       const mesh = new THREE.InstancedMesh(geo, mat, list.length);
       mesh.castShadow = true;
       const isStamp = STAMP2X2_IDS.has(obsType);

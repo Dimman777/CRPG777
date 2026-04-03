@@ -44,6 +44,10 @@ const RIVER_BED    = 1;
 const RIVER_BANK   = 2;
 const RIVER_RAPIDS = 3;
 
+// Shore/water terrain set — used in blend-zone logic to prevent land tiles
+// from appearing inside water chunks.  Module-level to avoid per-tile allocation.
+const SHORE_TERRAINS = new Set(['ocean', 'shallow_shore', 'steep_shore']);
+
 // ---- Slope direction from a 2D rank gradient --------------------------------
 const OCTANT_DIRS = [
   { name: 'E',  minA: -22.5,  maxA:  22.5 },
@@ -464,11 +468,17 @@ export class ChunkGenerator {
     const BAND    = 8; // tile-width of the blend zone on each edge
 
     const palette = getGroundPalette(cell.terrain, cell.moistureZone);
-    const total   = palette.reduce((s, e) => s + e.w, 0);
 
-    // Inline weighted pick from any palette
+    // Cache palette weight totals to avoid recomputing per tile.
+    const paletteTotalCache = new Map();
+    const paletteTotal = (pal) => {
+      let t = paletteTotalCache.get(pal);
+      if (t === undefined) { t = pal.reduce((a, e) => a + e.w, 0); paletteTotalCache.set(pal, t); }
+      return t;
+    };
+
     const pickGround = (pal, roll) => {
-      const tot = pal.reduce((a, e) => a + e.w, 0);
+      const tot = paletteTotal(pal);
       let cum = 0;
       for (const entry of pal) {
         cum += entry.w / tot;
@@ -488,7 +498,6 @@ export class ChunkGenerator {
         // neighbour, but shore/water cells never blend toward land.  This prevents
         // land-palette tiles from appearing inside shore/ocean chunks.
         // Shore/water neighbours also use a half-width band (4 tiles vs 8).
-        const SHORE_TERRAINS = new Set(['ocean', 'shallow_shore', 'steep_shore']);
         const cellIsWater = SHORE_TERRAINS.has(cell.terrain);
         let blendFactor = 0, blendCell = null;
 
@@ -606,11 +615,10 @@ export class ChunkGenerator {
         // Blend zone: pick the neighbour with the highest blend weight.
         // One-directional: shore/water cells never blend toward land.
         // Shore/water neighbours use a half-width band.
-        const SHORE_TERRAINS_OBS = new Set(['ocean', 'shallow_shore', 'steep_shore']);
         let blendFactor = 0, blendCell = null;
-        if (!SHORE_TERRAINS_OBS.has(cell.terrain)) {
+        if (!SHORE_TERRAINS.has(cell.terrain)) {
           const checkEdge = (dist, key) => {
-            const b = SHORE_TERRAINS_OBS.has(nbr[key]?.terrain) ? BAND / 2 : BAND;
+            const b = SHORE_TERRAINS.has(nbr[key]?.terrain) ? BAND / 2 : BAND;
             const f = Math.max(0, (b - dist) / b);
             if (f > blendFactor && nbr[key]) { blendFactor = f; blendCell = nbr[key]; }
           };
