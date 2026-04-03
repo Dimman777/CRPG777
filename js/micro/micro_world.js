@@ -125,37 +125,45 @@ export class MicroWorld {
       }
     }
 
-    // Process active incremental slices (1 slice per frame).
+    // Process slices and start new rerenders with a time budget.
+    // During normal gameplay: 1 slice per frame (~1ms).
+    // During initial load-in: fills up to TIME_BUDGET_MS per frame so chunks
+    // appear faster without starving the render loop.
     if (!this._activeSlices) this._activeSlices = [];
-    if (!didWork && this._activeSlices.length > 0) {
-      const slice = this._activeSlices[0];
-      slice.renderer.perfBegin = _pb;
-      const _t = performance.now();
-      const _endRR = _pb?.('rerender');
-      const done = slice.renderer.renderSlice(8);
-      _endRR?.();
-      slice.renderer.perfBegin = null;
-      if (done) {
-        this._activeSlices.shift();
-        const entry = this._chunks.get(slice.key);
-        if (entry) {
-          entry.group.visible = true;
-          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] rendered (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._rerenderQueue.length}rr ${this._activeSlices.length}sl`);
-        }
-      }
-      didWork = true;
-    }
-    // Start new incremental rerenders when no slices are active.
-    else if (!didWork && this._activeSlices.length === 0 && this._rerenderQueue.length > 0) {
-      const key = this._rerenderQueue.shift();
-      this._rerenderSet.delete(key);
-      const entry = this._chunks.get(key);
-      if (entry && entry.group.visible) {
+    const TIME_BUDGET_MS = 6;
+    const budgetStart = performance.now();
+    while (performance.now() - budgetStart < TIME_BUDGET_MS) {
+      if (this._activeSlices.length > 0) {
+        const slice = this._activeSlices[0];
+        slice.renderer.perfBegin = _pb;
         const _t = performance.now();
-        this._rerenderOne(key);
-        console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] sync-rerender (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms`);
+        const _endRR = _pb?.('rerender');
+        const done = slice.renderer.renderSlice(8);
+        _endRR?.();
+        slice.renderer.perfBegin = null;
+        if (done) {
+          this._activeSlices.shift();
+          const entry = this._chunks.get(slice.key);
+          if (entry) {
+            entry.group.visible = true;
+            console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] rendered (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms — ${this._rerenderQueue.length}rr ${this._activeSlices.length}sl`);
+          }
+        }
+        didWork = true;
+      } else if (this._rerenderQueue.length > 0) {
+        const key = this._rerenderQueue.shift();
+        this._rerenderSet.delete(key);
+        const entry = this._chunks.get(key);
+        if (entry && entry.group.visible) {
+          const _t = performance.now();
+          this._rerenderOne(key);
+          console.log(`[load +${(performance.now()-this._loadT0).toFixed(0)}ms] sync-rerender (${entry.mx},${entry.my}) ${(performance.now()-_t).toFixed(1)}ms`);
+        } else {
+          this._rerenderIncremental(key);
+        }
+        didWork = true;
       } else {
-        this._rerenderIncremental(key);
+        break; // nothing left to process
       }
     }
 
