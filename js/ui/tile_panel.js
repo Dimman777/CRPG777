@@ -62,6 +62,8 @@ export class TilePanel {
         ? '<span style="color:#c66"> ✕</span>'
         : '<span style="color:#6a6"> ·</span>';
       html += `<div><b>Cover:</b> ${obsLabel}${marker}</div>`;
+    } else {
+      html += `<div><b>Cover:</b> <span style="color:#555">-</span></div>`;
     }
 
     if (!passable) {
