@@ -572,12 +572,14 @@
 
     // ── Start Screen: Random World ───────────────────────────────────────────
 
-    document.getElementById('btn-random').addEventListener('click', () => {
+    document.getElementById('btn-random').addEventListener('click', async () => {
+      await fadeToBlack();
       startScreen.style.display = 'none';
       faultsLabel.style.display = '';          // show faults control for random worlds
       overlay.classList.add('visible');
       if (!lastMap) runGen(); else view.draw(lastMap, lastWorld);
       startFlash();
+      fadeFromBlack();
     });
 
     // ── Start Screen: Pre-set World ──────────────────────────────────────────
@@ -621,11 +623,13 @@
     // ── Load a preset world from its three bitmap URLs ────────────────────────
 
     async function loadPresetWorld(meta) {
+      await fadeToBlack();
       presetPanel.style.display = 'none';
       startScreen.style.display = 'none';
       overlay.classList.add('visible');
       statsEl.textContent = 'Loading bitmaps…';
       startFlash();
+      fadeFromBlack();
 
       try {
         const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
@@ -664,11 +668,13 @@
         return;
       }
 
+      await fadeToBlack();
       presetPanel.style.display = 'none';
       startScreen.style.display = 'none';
       overlay.classList.add('visible');
       statsEl.textContent = 'Loading bitmaps…';
       startFlash();
+      fadeFromBlack();
 
       try {
         const seed = parseInt(document.getElementById('map-seed-input').value) || 42;
