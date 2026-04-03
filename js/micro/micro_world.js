@@ -264,6 +264,9 @@ export class MicroWorld {
       this._playerState.place(spawn.x, spawn.y, elevFn);
       this._playerView.sync(this._playerState);
     }
+
+    // Signal that the world is fully loaded and rendered
+    if (this.onReady) this.onReady();
   }
 
   keyDown(key) { this._playerState?.keyDown(key); }
@@ -288,6 +291,10 @@ export class MicroWorld {
   // Callback slot — set by Game to receive chunk-transition tile offsets
   // so FollowerManager can adjust follower positions in sync with the player.
   onChunkTransition = null;
+
+  // Fires once after _loadAndPlacePlayer completes (init or teleport).
+  // Used by the UI to trigger fade-from-black at the right moment.
+  onReady = null;
 
   // Optional perf hooks — set by Game to instrument subsystem timings.
   // Each should be a function(name) that returns an end() function.

@@ -521,11 +521,11 @@
       mapPreviewBtn.style.display = 'block';
       editChunkBtn.style.display = 'block';
       view.goButtonLabel = 'Go Here';
-      // Defer the heavy load to the next frame so the fade-to-black CSS transition
-      // completes visually before JS blocks for ~500ms of chunk generation.
+      // Fade reveals when the world is fully loaded — not on a timer.
+      window._game.onReady = () => requestAnimationFrame(() => fadeFromBlack());
+      // Defer the heavy load so the fade-to-black completes visually first.
       requestAnimationFrame(() => {
         window._game.start({ ...opts, chunkOverrides: overrides });
-        requestAnimationFrame(() => fadeFromBlack());
       });
     }
 
@@ -547,9 +547,9 @@
         await fadeToBlack();
         overlay.classList.remove('visible');
         stopFlash();
+        window._game.onReady = () => requestAnimationFrame(() => fadeFromBlack());
         requestAnimationFrame(() => {
           window.dispatchEvent(new CustomEvent('goToCell', { detail: { mx, my } }));
-          requestAnimationFrame(() => fadeFromBlack());
         });
       } else {
         // Pre-game: show hero select before starting the adventure

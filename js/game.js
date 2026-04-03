@@ -91,6 +91,9 @@ export class Game {
   get sharedWorld() { return this._sharedWorld; }
   get playerCell()  { return this._playerCell; }
 
+  // Callback: fires when the world is fully loaded and rendered (init + teleport).
+  set onReady(fn) { this._onReady = fn; }
+
   start(worldOpts = {}) {
     this._playerCharId = worldOpts.heroId ?? 'grendoli';
     this._charSheet    = new CharacterSheet();
@@ -273,6 +276,7 @@ export class Game {
     };
 
     // Propagate chunk transitions to follower positions
+    this.microWorld.onReady = () => { if (this._onReady) this._onReady(); };
     this.microWorld.onChunkTransition = (dPx, dPy) => {
       this._followerMgr.onChunkTransition(dPx, dPy);
     };
