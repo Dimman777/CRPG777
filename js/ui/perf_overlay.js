@@ -60,11 +60,13 @@ export class PerfOverlay {
   }
 
   frameStart() {
+    if (!this._visible) return;
     this._frameStart = performance.now();
     this._timings = {};
   }
 
   begin(name) {
+    if (!this._visible) return null;
     const t0 = performance.now();
     return () => {
       const ms = performance.now() - t0;

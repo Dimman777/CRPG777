@@ -51,6 +51,11 @@ export class MicroWorld {
     this._loadQueue    = [];
     this._loadQueueSet = new Set();
     this._pendingPhase2 = null; // deferred phase2 generation from previous frame
+
+    // getTileInfo() cache — avoids per-frame object allocation when standing still
+    this._lastTileX     = -1;
+    this._lastTileY     = -1;
+    this._cachedTileInfo = null;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -283,15 +288,19 @@ export class MicroWorld {
   perfBegin = null;
 
   // Returns micro-tile data for the player's current standing tile, or null.
+  // Cached — only rebuilds the result object when the tile changes.
   getTileInfo() {
     const centre = this._centreChunk;
     if (!centre || !this._playerState) return null;
     const S  = CHUNK_SIZE;
     const tx = Math.max(0, Math.min(S - 1, Math.floor(this._playerState.px)));
     const ty = Math.max(0, Math.min(S - 1, Math.floor(this._playerState.py)));
+    if (tx === this._lastTileX && ty === this._lastTileY) return this._cachedTileInfo;
+    this._lastTileX = tx;
+    this._lastTileY = ty;
     const i  = ty * S + tx;
     const g  = centre.grid;
-    return {
+    this._cachedTileInfo = {
       tx, ty,
       ground:   g.ground[i],
       obstacle: g.obstacle[i],
@@ -299,6 +308,7 @@ export class MicroWorld {
       step:     Math.round(g.elevation[i] * ELEV_LEVELS),
       worldH:   +(g.elevation[i] * ELEVATION_SCALE).toFixed(1),
     };
+    return this._cachedTileInfo;
   }
 
   // ── Bridge-layer API ────────────────────────────────────────────────────────
