@@ -375,7 +375,10 @@ export class MacroMapView {
       lines.push(`<b>${p.name}</b>`);
       lines.push(pTyp);
       if (p.subtype)      lines.push(`Race: ${p.subtype}`);
-      if (p.dangerLevel)  lines.push(`Danger: ${'★'.repeat(p.dangerLevel)}${'☆'.repeat(5 - p.dangerLevel)}`);
+      if (p.dangerLevel) {
+        const dl = Math.max(1, Math.min(5, p.dangerLevel));
+        lines.push(`Danger: ${'★'.repeat(dl)}${'☆'.repeat(5 - dl)}`);
+      }
     }
 
     this._infoCard.innerHTML = lines.join('\n');
