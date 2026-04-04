@@ -163,10 +163,16 @@ export class Game {
     // 2. Patch macro data in-place — factions, leaders, regions, day.
     this.#applyMacroSnapshot(snapshot.macro);
 
-    // 3. Teleport player to saved macro cell — chunk pool regenerates around it.
+    // 3. Teleport to saved macro cell, then restore exact tile position.
     this.microWorld.teleportTo(snapshot.playerPos.mx, snapshot.playerPos.my);
+    const player = this.microWorld.player;
+    if (player && snapshot.playerPos.px != null) {
+      player.px = snapshot.playerPos.px;
+      player.py = snapshot.playerPos.py;
+      player.refresh(this.microWorld.centreRenderer);
+    }
 
-    // 4. Snap camera to new position so it doesn't lerp from the old location.
+    // 4. Snap camera to restored position.
     const p = this.microWorld.player?.position;
     if (p && this.cameraController) {
       this.cameraController.setTarget(p.x, p.y, p.z);
