@@ -7,11 +7,7 @@ import { CombatManager }         from './combat_manager.js';
 import { getWorldConditions, applyWorldConditions } from '../bridge/macro_to_micro.js';
 import { buildCombatConsequence } from '../bridge/micro_to_macro.js';
 import { applyConsequence }       from '../bridge/consequence_mapper.js';
-
-const GRID_W          = 10;
-const GRID_H          = 10;
-const COMBAT_INTERVAL = 700;
-const MAX_COMMITMENT  = 5;
+import { GRID_W, GRID_H, COMBAT_INTERVAL, MAX_COMMITMENT } from '../data/game_config.js';
 
 export class CombatSession {
   /**

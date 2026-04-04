@@ -1,4 +1,5 @@
 import { rollStatDie } from './dice.js';
+import { MELEE_BASE_DAMAGE } from '../data/game_config.js';
 
 // Active opposition: attacker rolls attackStat vs defender rolls defenseStat.
 // Returns { success, margin, attackRoll, defenseRoll }.
@@ -30,6 +31,6 @@ export function resolveVsDC(combatant, stat, dc, rng = null) {
 // Returns the resolution result plus a calculated damage value.
 export function resolveMeleeAttack(attacker, defender, rng = null) {
   const result = resolveVsTarget(attacker, defender, 'strength', 'toughness', rng);
-  const damage = result.success ? 3 + Math.max(0, result.margin) : 0;
+  const damage = result.success ? MELEE_BASE_DAMAGE + Math.max(0, result.margin) : 0;
   return { ...result, damage };
 }

@@ -1,3 +1,5 @@
+import { COMBATANT_HP, COMBATANT_STAMINA } from '../data/game_config.js';
+
 export class Combatant {
   constructor({ id, name, factionId, stats }) {
     this.id = id;
@@ -9,8 +11,8 @@ export class Combatant {
 
     // Combat resources
     this.resources = {
-      hp:      { current: 20, max: 20 },
-      stamina: { current: 10, max: 10 },
+      hp:      { current: COMBATANT_HP,      max: COMBATANT_HP },
+      stamina: { current: COMBATANT_STAMINA, max: COMBATANT_STAMINA },
     };
 
     // Set by initiative.js each round

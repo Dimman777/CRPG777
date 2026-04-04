@@ -31,13 +31,14 @@ import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
 import { RNG }             from './core/rng.js';
 import { PerfOverlay }     from './ui/perf_overlay.js';
-
-const MACRO_INTERVAL       = 2000;
-const PLAYER_FACTION       = 'a';
-const PLAYER_COMBATANT_ID  = 'a0';
-const COMBAT_REGION        = 'r1';
-const MAX_COMMITMENT       = 5;
-const START_MANPOWER       = 8;
+import {
+  MACRO_INTERVAL,
+  PLAYER_FACTION,
+  PLAYER_COMBATANT_ID,
+  COMBAT_REGION,
+  MAX_COMMITMENT,
+  START_MANPOWER,
+} from './data/game_config.js';
 
 export const GameState = Object.freeze({
   LOADING:     'loading',
