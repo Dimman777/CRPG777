@@ -177,4 +177,6 @@ export class LocationPanel {
 
     this._el.innerHTML = html;
   }
+
+  dispose() { this._el.remove(); }
 }

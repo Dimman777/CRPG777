@@ -72,4 +72,6 @@ export class TilePanel {
 
     this._el.innerHTML = html;
   }
+
+  dispose() { this._el.remove(); }
 }

@@ -192,4 +192,6 @@ export class CharacterSheet {
 
     return html;
   }
+
+  dispose() { this._overlay.remove(); }
 }

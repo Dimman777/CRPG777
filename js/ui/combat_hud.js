@@ -109,4 +109,6 @@ export class CombatHud {
     this._el.innerHTML = '';
     this._el.style.pointerEvents = 'none';
   }
+
+  dispose() { this._el.remove(); }
 }

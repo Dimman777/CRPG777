@@ -61,6 +61,8 @@ export class MacroPanel {
 
     this._el.innerHTML = html;
   }
+
+  dispose() { this._el.remove(); }
 }
 
 function bar(label, value, color) {

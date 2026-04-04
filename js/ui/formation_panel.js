@@ -216,4 +216,6 @@ export class FormationPanel {
       this._render();
     }
   }
+
+  dispose() { this._el.remove(); }
 }

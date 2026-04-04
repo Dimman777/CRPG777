@@ -69,4 +69,6 @@ export class DialogueUI {
     this._container.style.display = 'none';
     this._el.innerHTML = '';
   }
+
+  dispose() { this._el.remove(); }
 }

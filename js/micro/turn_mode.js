@@ -85,6 +85,15 @@ export class TurnMode {
   get isActive()    { return this._tc.isActive; }
   get actionMode()  { return this._actionMode; }
 
+  dispose() {
+    this._hud.dispose();
+    this._bar.dispose();
+    // Remove highlight meshes from scene
+    [...this._runMids, ...this._runDsts].forEach(m => this._opts.scene.remove(m));
+    if (this._stopSudden)  this._opts.scene.remove(this._stopSudden);
+    if (this._stopGradual) this._opts.scene.remove(this._stopGradual);
+  }
+
   // Call every frame
   update(dt) {
     const o = this._opts;

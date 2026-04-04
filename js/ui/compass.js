@@ -52,6 +52,7 @@ export class Compass {
       </svg>`;
 
     document.body.appendChild(wrap);
+    this._wrap = wrap;
     this._rose = wrap.querySelector('#compass-rose');
     this._lastAz = null;
   }
@@ -61,4 +62,6 @@ export class Compass {
     this._lastAz = azimuth;
     this._rose.setAttribute('transform', `rotate(${azimuth})`);
   }
+
+  dispose() { this._wrap.remove(); }
 }

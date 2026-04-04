@@ -156,4 +156,6 @@ export class PerfOverlay {
 
     this._el.innerHTML = html;
   }
+
+  dispose() { this._el.remove(); }
 }

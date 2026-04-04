@@ -218,16 +218,30 @@ export class Game {
   }
 
   #teardown() {
-    if (this.#macroTimer)  { clearInterval(this.#macroTimer); this.#macroTimer = null; }
-    if (this.rendering)    { this.rendering.stop(); }
-    if (this.scene)        { this.scene.dispose(); }
+    if (this.#macroTimer) { clearInterval(this.#macroTimer); this.#macroTimer = null; }
+    if (this.rendering)   { this.rendering.stop(); }
+
+    // Dispose all UI and visual components — removes their DOM/scene elements.
+    [
+      this.macroPanel, this.dialogueUI, this.combatHud,
+      this.#locationPanel, this.#tilePanel, this.#compass,
+      this.#formationPanel, this.#charSheet, this.#followerVis,
+      this.#perf, this.#saveLoadUI, this.#turnMode,
+    ].forEach(c => c?.dispose?.());
+
+    if (this.scene) { this.scene.dispose(); }
     window.removeEventListener('resize',  this.#onResize);
     window.removeEventListener('keydown', this.#onCameraKey);
-    // Reset public subsystems so start() can reinitialise them cleanly.
+
+    // Reset all references so start() reinitialises cleanly.
     this.scene = this.rendering = this.cameraController = null;
     this.gridVisuals = this.actorVisuals = this.combatHud = null;
     this.macroPanel = this.dialogueUI = this.macroGame = null;
     this.npcManager = this.microWorld = this.dialogueMgr = null;
+    this.#locationPanel = this.#tilePanel = this.#compass = null;
+    this.#formationPanel = this.#charSheet = this.#followerVis = null;
+    this.#perf = this.#turnMode = this.#explorationInput = null;
+    this.#combatSession = this.#followerMgr = null;
     this.started = false;
     this.#state = GameState.LOADING;
   }
