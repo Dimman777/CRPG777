@@ -62,8 +62,8 @@ function _buildSnapshot(game) {
     // Player
     playerCharId: game.playerCharId,
     playerPos: {
-      px: player?.px ?? 32.5,
-      py: player?.py ?? 32.5,
+      mx: game.playerCell?.mx ?? 0,  // macro map cell — used for teleportTo()
+      my: game.playerCell?.my ?? 0,
     },
 
     // RNG — the critical determinism anchor
