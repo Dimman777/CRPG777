@@ -11,6 +11,7 @@
 // positions stay in sync.
 
 import { CHUNK_SIZE } from './micro_grid.js';
+import { isPassable } from './tile_utils.js';
 
 export const FORMATION_MODE = Object.freeze({ LOOSE: 'loose', TIGHT: 'tight' });
 
@@ -221,7 +222,7 @@ export class FollowerManager {
     const playerTileZ = Math.floor(playerPz);
 
     const canStep = (tx, tz) =>
-      this._passable(tx, tz, grid) &&
+      isPassable(tx, tz, grid) &&
       !(tx === playerTileX && tz === playerTileZ) &&
       !this._overlapsFollower(tx + 0.5, tz + 0.5, f, this._followers);
 
@@ -608,7 +609,7 @@ export class FollowerManager {
       const az = Math.sin(angle + da) * step;
       const nx = f.px + ax;
       const nz = f.py + az;
-      if (this._passable(nx, nz, grid) && !this._overlapsFollower(nx, nz, f, allFollowers)) {
+      if (isPassable(nx, nz, grid) && !this._overlapsFollower(nx, nz, f, allFollowers)) {
         f.px         = nx;
         f.py         = nz;
         f.headingX   = ax / step;
@@ -635,14 +636,6 @@ export class FollowerManager {
       if (Math.hypot(nx - other.px, nz - other.py) < SEP) return true;
     }
     return false;
-  }
-
-  _passable(x, z, grid) {
-    if (!grid) return true;
-    const S = CHUNK_SIZE;
-    if (x < 0 || x >= S || z < 0 || z >= S) return true;
-    const i = Math.floor(z) * S + Math.floor(x);
-    return !!grid.passable[i];
   }
 
   // ── Formation geometry ──────────────────────────────────────────────────────
@@ -681,7 +674,7 @@ export class FollowerManager {
             { x: tx + 1.5, z: tz + 0.5 },
             { x: tx + 0.5, z: tz - 0.5 },
             { x: tx + 0.5, z: tz + 1.5 },
-          ].filter(p => this._passable(p.x, p.z, grid));
+          ].filter(p => isPassable(p.x, p.z, grid));
           if (adj.length === 0) continue;
           adj.sort((a, b) =>
             Math.hypot(a.x - follower.px, a.z - follower.py) -

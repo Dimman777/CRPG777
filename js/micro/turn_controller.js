@@ -8,7 +8,7 @@
 //
 // All characters snap to tile centres when turn mode is entered.
 
-import { CHUNK_SIZE } from './micro_grid.js';
+import { isPassable, isOccupied } from './tile_utils.js';
 
 // All 16 tiles in the Chebyshev-2 run ring, each with its intermediate tile.
 // Cardinal / diagonal: mid is the exact midpoint.
@@ -91,7 +91,7 @@ export class TurnController {
     const tx = tileX + sx;
     const tz = tileZ + sz;
 
-    if (!this._passable(tx, tz, grid)) return false;
+    if (!isPassable(tx, tz, grid)) return false;
     // Block movement into a tile occupied by any follower
     if (followers.some(f => Math.floor(f.px) === tx && Math.floor(f.py) === tz)) return false;
 
@@ -118,7 +118,7 @@ export class TurnController {
     if (stepX === 0 && stepZ === 0) return null;
     const tx = Math.floor(player.px) + stepX;
     const tz = Math.floor(player.py) + stepZ;
-    if (!this._passable(tx, tz, grid)) return null;
+    if (!isPassable(tx, tz, grid)) return null;
     if (followers.some(f => Math.floor(f.px) === tx && Math.floor(f.py) === tz)) return null;
     return { tx, tz };
   }
@@ -165,8 +165,8 @@ export class TurnController {
 
       const midX = ptx + c.mx, midZ = ptz + c.mz;
       const dstX = ptx + c.dx, dstZ = ptz + c.dz;
-      if (!this._passable(midX, midZ, grid)) continue;
-      if (!this._passable(dstX, dstZ, grid)) continue;
+      if (!isPassable(midX, midZ, grid)) continue;
+      if (!isPassable(dstX, dstZ, grid)) continue;
       if (followers.some(f => {
         const fx = Math.floor(f.px), fz = Math.floor(f.py);
         return (fx === midX && fz === midZ) || (fx === dstX && fz === dstZ);
@@ -314,9 +314,9 @@ export class TurnController {
 
     for (const [cx, cz] of candidates) {
       const tx = fTileX + cx, tz = fTileZ + cz;
-      if (!this._passable(tx, tz, grid))                    continue;
+      if (!isPassable(tx, tz, grid))                    continue;
       if (tx === pTileX && tz === pTileZ)                   continue; // don't stand on player
-      if (this._occupiedBy(tx, tz, f, allFollowers))        continue;
+      if (isOccupied(tx, tz, f, allFollowers))        continue;
 
       f.px = tx + 0.5;
       f.py = tz + 0.5;
@@ -332,21 +332,6 @@ export class TurnController {
   _snapToTile(entity) {
     entity.px = Math.floor(entity.px) + 0.5;
     entity.py = Math.floor(entity.py) + 0.5;
-  }
-
-  _passable(tx, tz, grid) {
-    if (!grid) return true;
-    const S = CHUNK_SIZE;
-    if (tx < 0 || tx >= S || tz < 0 || tz >= S) return true; // out-of-bounds → chunk transition
-    return !!grid.passable[tz * S + tx];
-  }
-
-  _occupiedBy(tx, tz, self, allFollowers) {
-    for (const f of allFollowers) {
-      if (f === self) continue;
-      if (Math.floor(f.px) === tx && Math.floor(f.py) === tz) return true;
-    }
-    return false;
   }
 
   _notify() {
