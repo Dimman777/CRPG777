@@ -31,6 +31,8 @@ import { ChunkOverrides }  from './core/chunk_overrides.js';
 import { CHARACTERS, getCharacter } from './data/characters_data.js';
 import { RNG }             from './core/rng.js';
 import { PerfOverlay }     from './ui/perf_overlay.js';
+import { save, load, hasSave, deleteSave } from './core/save_load.js';
+import { SaveLoadUI } from './ui/save_load_ui.js';
 import {
   MACRO_INTERVAL,
   PLAYER_FACTION,
@@ -90,8 +92,11 @@ export class Game {
   #perf            = null;
   #rng             = null;
   #onReady         = null;
-  #onResize        = null;
-  #onCameraKey     = null;
+  #onResize               = null;
+  #onCameraKey            = null;
+  #pendingMacroSnapshot    = null;
+  #pendingFollowerSnapshot = null;
+  #saveLoadUI              = null;
 
   // ── Public subsystems (referenced by index.html and overlay scripts) ─────────
   constructor() {
@@ -112,11 +117,120 @@ export class Game {
 
   // ── Public API ───────────────────────────────────────────────────────────────
 
-  get state()       { return this.#state; }
-  get sharedWorld() { return this.#sharedWorld; }
-  get playerCell()  { return this.#playerCell; }
+  get state()          { return this.#state; }
+  get sharedWorld()    { return this.#sharedWorld; }
+  get playerCell()     { return this.#playerCell; }
+  get playerCharId()   { return this.#playerCharId; }
+  get rngState()       { return this.#rng?.state ?? 0; }
+  get followerMgrRef() { return this.#followerMgr; }
 
   set onReady(fn) { this.#onReady = fn; }
+
+  // ── Save / Load ──────────────────────────────────────────────────────────────
+
+  save() {
+    if (this.#state !== GameState.EXPLORATION) {
+      console.warn('[SaveLoad] Can only save during exploration.');
+      return null;
+    }
+    const snapshot = save(this);
+    debug('[Save] Game saved.');
+    return snapshot;
+  }
+
+  hasSave() { return hasSave(); }
+
+  loadFromStorage() {
+    const snapshot = load();
+    if (!snapshot) {
+      debug('[Load] No save found.');
+      return;
+    }
+    this.#restoreFromSnapshot(snapshot);
+  }
+
+  deleteSave() {
+    deleteSave();
+    debug('[Save] Save deleted.');
+  }
+
+  #restoreFromSnapshot(snapshot) {
+    // Full restart with saved values injected as worldOpts.
+    // Macro state is restored after init via #applyMacroSnapshot.
+    this.#pendingMacroSnapshot = snapshot.macro;
+    this.#pendingFollowerSnapshot = snapshot.followers;
+
+    const worldOpts = {
+      seed:          snapshot.seed,
+      numFaults:     snapshot.numFaults,
+      heroId:        snapshot.playerCharId,
+      startMx:       Math.floor(snapshot.playerPos.px),
+      startMy:       Math.floor(snapshot.playerPos.py),
+      chunkOverrides: this.#chunkOverrides ?? new ChunkOverrides(),
+    };
+
+    // Tear down current session and restart cleanly.
+    this.#teardown();
+    this.start(worldOpts);
+
+    // Restore RNG state after start() has created the RNG instance.
+    if (this.#rng) this.#rng.state = snapshot.rngState;
+
+    debug('[Load] Game loaded from save.');
+  }
+
+  #applyMacroSnapshot(snapshot) {
+    if (!snapshot) return;
+    this.macroGame.day = snapshot.day;
+    for (const [id, data] of Object.entries(snapshot.factions)) {
+      const f = this.macroGame.factions.get(id);
+      if (!f) continue;
+      Object.assign(f.resources, data.resources);
+      f.territories = [...data.territories];
+      f.projects    = [...(data.projects ?? [])];
+    }
+    for (const [id, data] of Object.entries(snapshot.leaders)) {
+      const l = this.macroGame.leaders.get(id);
+      if (!l) continue;
+      l.alive       = data.alive;
+      l.socialState = { ...data.socialState };
+    }
+    for (const [id, data] of Object.entries(snapshot.regions)) {
+      const r = this.macroGame.regions.get(id);
+      if (!r) continue;
+      r.ownerFactionId   = data.ownerFactionId;
+      r.security         = data.security;
+      r.prosperity       = data.prosperity;
+      r.unrest           = data.unrest;
+      r.foodSupply       = data.foodSupply;
+      r.arcanePressure   = data.arcanePressure;
+      r.militaryPresence = data.militaryPresence;
+    }
+    this.macroPanel.update(this.macroGame);
+  }
+
+  #applyFollowerSnapshot(snapshot, player) {
+    if (!snapshot || !this.#followerMgr) return;
+    this.#formationPanel?.setActiveIds?.(snapshot.activeIds);
+    const charData = snapshot.activeIds.map(id => getCharacter(id)).filter(Boolean);
+    this.#followerMgr.setActiveFollowers(charData, player);
+    if (snapshot.mode) this.#followerMgr.setMode(snapshot.mode);
+  }
+
+  #teardown() {
+    if (this.#macroTimer) { clearInterval(this.#macroTimer); this.#macroTimer = null; }
+    if (this.rendering)   { this.rendering.stop?.(); }
+    if (this.scene)       { this.scene.dispose?.(); }
+    window.removeEventListener('resize',  this.#onResize);
+    window.removeEventListener('keydown', this.#onCameraKey);
+    // Reset public subsystems so start() can reinitialise them cleanly.
+    this.scene = this.rendering = this.cameraController = null;
+    this.gridVisuals = this.actorVisuals = this.combatHud = null;
+    this.macroPanel = this.dialogueUI = this.macroGame = null;
+    this.npcManager = this.microWorld = this.dialogueMgr = null;
+    this.started = false;
+    this.#state = GameState.LOADING;
+  }
 
   start(worldOpts = {}) {
     this.#playerCharId = worldOpts.heroId ?? 'grendoli';
@@ -153,6 +267,23 @@ export class Game {
     // State transitions to EXPLORATION which starts the macro timer.
     this.rendering.start();
     this.#setState(GameState.EXPLORATION);
+
+    // Restore macro + follower state if this is a load-from-save.
+    if (this.#pendingMacroSnapshot) {
+      this.#applyMacroSnapshot(this.#pendingMacroSnapshot);
+      this.#pendingMacroSnapshot = null;
+    }
+    if (this.#pendingFollowerSnapshot) {
+      this.#applyFollowerSnapshot(this.#pendingFollowerSnapshot, this.microWorld.player);
+      this.#pendingFollowerSnapshot = null;
+    }
+
+    // Save/Load UI — update on each state change via the render loop
+    if (!this.#saveLoadUI) {
+      this.#saveLoadUI = new SaveLoadUI(this);
+    } else {
+      this.#saveLoadUI.update();
+    }
 
     debug('World loaded. WASD move · Q/E rotate camera · Z/C torso · Space toggle turn mode.');
   }
@@ -363,6 +494,7 @@ export class Game {
       this.#followerVis.sync(this.#followerMgr.followers, this.microWorld.centreRenderer);
       this.#tilePanel.update(this.microWorld.getTileInfo());
       this.#compass.update(this.cameraController.azimuth);
+      this.#saveLoadUI?.update();
 
       perf.frameEnd();
     };
