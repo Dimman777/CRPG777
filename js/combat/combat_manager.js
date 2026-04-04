@@ -2,6 +2,7 @@ import { Combatant } from './combatant.js';
 import { InitiativeQueue } from './initiative.js';
 import { resolveMeleeAttack } from './action_resolution.js';
 import { GridState } from './grid_state.js';
+import { RNG } from '../core/rng.js';
 
 const MELEE_RANGE   = 1;  // Chebyshev tiles
 const ACTION_COST   = 2;  // initiative penalty per action
@@ -231,6 +232,6 @@ export function runTestEncounter() {
     stats: { strength: 2, toughness: 3, reflexes: 2, coordination: 3 },
   });
 
-  const manager = new CombatManager([fighter1, fighter2]);
+  const manager = new CombatManager([fighter1, fighter2], 10, 10, new RNG(1));
   return manager.run();
 }

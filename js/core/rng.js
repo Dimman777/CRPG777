@@ -5,9 +5,11 @@
 //   const rng = new RNG(42);
 //   rng.next()          → float in [0, 1)
 //   rng.nextInt(1, 6)   → integer in [1, 6]
+//   rng.state           → serialise for save/load
+//   rng.state = n       → restore from save
 //
-// For cosmetic-only randomness (head-look timers, etc.) that doesn't
-// need to be reproducible, use Math.random() directly.
+// Rule: all gameplay randomness must go through an RNG instance.
+// Cosmetic-only randomness (head-look timers, etc.) may use Math.random().
 
 export class RNG {
   constructor(seed) {
@@ -33,10 +35,3 @@ export class RNG {
   // Restore internal state (for save/load).
   set state(s) { this._state = s >>> 0; }
 }
-
-// ── Legacy exports (convenience for transition period) ───────────────
-// These use a module-level default instance seeded from Date.now().
-// Prefer passing an RNG instance through constructors instead.
-const _default = new RNG(Date.now());
-export function rand()           { return _default.next(); }
-export function randInt(min, max) { return _default.nextInt(min, max); }

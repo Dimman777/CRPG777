@@ -74,8 +74,7 @@ export class FollowerManager {
   get followers() { return this._followers; }
   get mode()      { return this._mode; }
 
-  // Seeded random — falls back to Math.random if no RNG was provided.
-  _rand() { return this._rng ? this._rng.next() : Math.random(); }
+  _rand() { return this._rng.next(); }
   get count()     { return this._followers.length; }
 
   // ── Public API ──────────────────────────────────────────────────────────────
