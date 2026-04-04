@@ -218,9 +218,9 @@ export class Game {
   }
 
   #teardown() {
-    if (this.#macroTimer) { clearInterval(this.#macroTimer); this.#macroTimer = null; }
-    if (this.rendering)   { this.rendering.stop?.(); }
-    if (this.scene)       { this.scene.dispose?.(); }
+    if (this.#macroTimer)  { clearInterval(this.#macroTimer); this.#macroTimer = null; }
+    if (this.rendering)    { this.rendering.stop(); }
+    if (this.scene)        { this.scene.dispose(); }
     window.removeEventListener('resize',  this.#onResize);
     window.removeEventListener('keydown', this.#onCameraKey);
     // Reset public subsystems so start() can reinitialise them cleanly.

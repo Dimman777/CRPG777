@@ -45,4 +45,9 @@ export class SceneSetup {
   onResize(width, height) {
     this.renderer.setSize(width, height);
   }
+
+  dispose() {
+    this.renderer.domElement.remove();
+    this.renderer.dispose();
+  }
 }
