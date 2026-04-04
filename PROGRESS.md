@@ -22,7 +22,7 @@ Task tracking, prioritization, and file-split scheduling live in **GitHub Issues
 | 4 | Macro skeleton — factions, regions, daily turns | ✅ Complete |
 | 5 | Bridge layer — macro↔micro consequence system | ✅ Complete (thin) |
 | 6 | Micro world — exploration, NPCs, dialogue | 🔶 Partial |
-| 7 | Save / Load | ❌ Not started — [#17](https://github.com/Dimman777/CRPG777/issues/17) |
+| 7 | Save / Load | ✅ Complete — [#17](https://github.com/Dimman777/CRPG777/issues/17) |
 | 8 | Dialogue expansion — quests, exploration trees | ❌ Not started — [#27](https://github.com/Dimman777/CRPG777/issues/27) |
 | 9 | War & Diplomacy depth | 🔶 Scaffolded — [#28](https://github.com/Dimman777/CRPG777/issues/28) |
 | 10 | Strategic Projects system | 🔶 Scaffolded — [#26](https://github.com/Dimman777/CRPG777/issues/26) |
@@ -41,7 +41,7 @@ Task tracking, prioritization, and file-split scheduling live in **GitHub Issues
 | `rng.js` | ✅ Done | Seeded, deterministic — used throughout |
 | `event_bus.js` | ❌ Not present | Not yet implemented |
 | `time.js` | ❌ Not present | Macro interval hardcoded in game.js — [#9](https://github.com/Dimman777/CRPG777/issues/9) |
-| `save_load.js` | ❌ Not started | [#17](https://github.com/Dimman777/CRPG777/issues/17) |
+| `save_load.js` | ✅ Done | [#17](https://github.com/Dimman777/CRPG777/issues/17) |
 | `version.js` | ✅ Done | |
 | `chunk_overrides.js` | ✅ Done | Chunk editor persistence |
 
