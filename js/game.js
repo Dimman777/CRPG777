@@ -286,16 +286,6 @@ export class Game {
     this.rendering.start();
     this.#setState(GameState.EXPLORATION);
 
-    // Restore macro + follower state if this is a load-from-save.
-    if (this.#pendingMacroSnapshot) {
-      this.#applyMacroSnapshot(this.#pendingMacroSnapshot);
-      this.#pendingMacroSnapshot = null;
-    }
-    if (this.#pendingFollowerSnapshot) {
-      this.#applyFollowerSnapshot(this.#pendingFollowerSnapshot, this.microWorld.player);
-      this.#pendingFollowerSnapshot = null;
-    }
-
     // Save/Load UI — update on each state change via the render loop
     if (!this.#saveLoadUI) {
       this.#saveLoadUI = new SaveLoadUI(this);
