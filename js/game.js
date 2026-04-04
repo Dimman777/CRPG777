@@ -94,9 +94,7 @@ export class Game {
   #onReady         = null;
   #onResize               = null;
   #onCameraKey            = null;
-  #pendingMacroSnapshot    = null;
-  #pendingFollowerSnapshot = null;
-  #saveLoadUI              = null;
+  #saveLoadUI = null;
 
   // ── Public subsystems (referenced by index.html and overlay scripts) ─────────
   constructor() {
@@ -155,27 +153,33 @@ export class Game {
   }
 
   #restoreFromSnapshot(snapshot) {
-    // Full restart with saved values injected as worldOpts.
-    // Macro state is restored after init via #applyMacroSnapshot.
-    this.#pendingMacroSnapshot = snapshot.macro;
-    this.#pendingFollowerSnapshot = snapshot.followers;
+    // In-place data refresh — no teardown or restart needed.
+    // Chunks regenerate automatically when we teleport to the saved position.
+    this.#setState(GameState.LOADING);
 
-    const worldOpts = {
-      seed:          snapshot.seed,
-      numFaults:     snapshot.numFaults,
-      heroId:        snapshot.playerCharId,
-      startMx:       Math.floor(snapshot.playerPos.px),
-      startMy:       Math.floor(snapshot.playerPos.py),
-      chunkOverrides: this.#chunkOverrides ?? new ChunkOverrides(),
-    };
-
-    // Tear down current session and restart cleanly.
-    this.#teardown();
-    this.start(worldOpts);
-
-    // Restore RNG state after start() has created the RNG instance.
+    // 1. Restore RNG state.
     if (this.#rng) this.#rng.state = snapshot.rngState;
 
+    // 2. Patch macro data in-place — factions, leaders, regions, day.
+    this.#applyMacroSnapshot(snapshot.macro);
+
+    // 3. Teleport player to saved position — chunk pool regenerates around it.
+    const mx = Math.floor(snapshot.playerPos.px);
+    const my = Math.floor(snapshot.playerPos.py);
+    this.microWorld.teleportTo(mx, my);
+
+    // 4. Snap camera to new position so it doesn't lerp from the old location.
+    const p = this.microWorld.player?.position;
+    if (p && this.cameraController) {
+      this.cameraController.setTarget(p.x, p.y, p.z);
+      this.cameraController.snapY();
+    }
+
+    // 5. Restore followers.
+    this.#applyFollowerSnapshot(snapshot.followers, this.microWorld.player);
+
+    // 6. Resume.
+    this.#setState(GameState.EXPLORATION);
     debug('[Load] Game loaded from save.');
   }
 
