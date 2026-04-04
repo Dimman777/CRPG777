@@ -59,11 +59,11 @@ function _buildSnapshot(game) {
     seed:         game.sharedWorld?.seed      ?? 42,
     numFaults:    game.sharedWorld?.numFaults ?? 0,
 
-    // Player
+    // Player — read macro cell directly from microWorld (source of truth)
     playerCharId: game.playerCharId,
     playerPos: {
-      mx: game.playerCell?.mx ?? 0,  // macro map cell — used for teleportTo()
-      my: game.playerCell?.my ?? 0,
+      mx: game.microWorld?._mx ?? 0,
+      my: game.microWorld?._my ?? 0,
     },
 
     // RNG — the critical determinism anchor
