@@ -39,6 +39,15 @@ const COMBAT_REGION        = 'r1';
 const MAX_COMMITMENT       = 5;
 const START_MANPOWER       = 8;
 
+export const GameState = Object.freeze({
+  LOADING:     'loading',
+  EXPLORATION: 'exploration',
+  TURN_MOVE:   'turn_move',
+  DIALOGUE:    'dialogue',
+  COMBAT:      'combat',
+  WAR_OVER:    'war_over',
+});
+
 const ROSTER = {
   a: [
     { name: 'Aldric',  stats: { strength: 3, toughness: 2, reflexes: 3, coordination: 2 } },
@@ -57,93 +66,116 @@ const ROSTER = {
 };
 
 export class Game {
+  // ── Private fields ───────────────────────────────────────────────────────────
+  #state           = GameState.LOADING;
+  #macroTimer      = null;
+  #macroLogIdx     = 0;
+  #commitments     = { a: 1, b: 1 };
+  #combatSession   = null;
+  #followerMgr     = null;
+  #followerVis     = null;
+  #formationPanel  = null;
+  #explorationInput = null;
+  #turnMode        = null;
+  #chunkOverrides  = null;
+  #sharedWorld     = null;
+  #playerCell      = null;
+  #playerCharId    = 'grendoli';
+  #charSheet       = null;
+  #contextMenu     = null;
+  #locationPanel   = null;
+  #tilePanel       = null;
+  #compass         = null;
+  #perf            = null;
+  #rng             = null;
+  #onReady         = null;
+  #onResize        = null;
+  #onCameraKey     = null;
+
+  // ── Public subsystems (referenced by index.html and overlay scripts) ─────────
   constructor() {
-    this.scene           = null;
-    this.rendering       = null;
+    this.scene            = null;
+    this.rendering        = null;
     this.cameraController = null;
-    this.gridVisuals     = null;
-    this.actorVisuals    = null;
-    this.combatHud       = null;
-    this.macroPanel      = null;
-    this.dialogueUI      = null;
-    this.macroGame       = null;
-    this.npcManager      = null;
-    this.microWorld      = null;
-    this.dialogueMgr     = null;
-    this._combatSession  = null;
-    this._macroTimer     = null;
-    this._macroLogIdx    = 0;
-    this._commitments    = { a: 1, b: 1 };
-    this._followerMgr    = null;
-    this._followerVis    = null;
-    this._formationPanel = null;
-    this._explorationInput  = null;
-    this._turnMode          = null;
-    this._chunkOverrides       = null;  // ChunkOverrides — shared with the macro map editor
-    this._sharedWorld          = null;  // { seed, map, worldData } — set in _initExploration
-    this._playerCell           = null;  // { mx, my } — updated on cell change events
-    this._playerCharId         = 'grendoli';
-    this._charSheet            = null;
-    this._contextMenu          = null;  // right-click follower context menu div
+    this.gridVisuals      = null;
+    this.actorVisuals     = null;
+    this.combatHud        = null;
+    this.macroPanel       = null;
+    this.dialogueUI       = null;
+    this.macroGame        = null;
+    this.npcManager       = null;
+    this.microWorld       = null;
+    this.dialogueMgr      = null;
+    this.started          = false;
   }
 
-  // Public getters for state that index.html / overlay scripts may need.
-  get sharedWorld() { return this._sharedWorld; }
-  get playerCell()  { return this._playerCell; }
+  // ── Public API ───────────────────────────────────────────────────────────────
 
-  // Callback: fires when the world is fully loaded and rendered (init + teleport).
-  set onReady(fn) { this._onReady = fn; }
+  get state()       { return this.#state; }
+  get sharedWorld() { return this.#sharedWorld; }
+  get playerCell()  { return this.#playerCell; }
+
+  set onReady(fn) { this.#onReady = fn; }
 
   start(worldOpts = {}) {
-    this._playerCharId = worldOpts.heroId ?? 'grendoli';
-    this._charSheet    = new CharacterSheet();
+    this.#playerCharId = worldOpts.heroId ?? 'grendoli';
+    this.#charSheet    = new CharacterSheet();
     const viewport = document.getElementById('game-viewport');
     this.scene            = new SceneSetup(viewport);
     this.cameraController = new CameraController(viewport.clientWidth, viewport.clientHeight);
     this.rendering        = new Rendering(this.scene);
     this.rendering.cameraController = this.cameraController;
-    // Don't start the render loop yet — wait until init is complete so the
-    // first few frames don't compete with chunk generation for CPU time.
 
-    // Store listener references for cleanup on restart/destroy.
-    this._onResize = () => {
+    this.#onResize = () => {
       const w = viewport.clientWidth, h = viewport.clientHeight;
       this.scene.onResize(w, h);
       this.cameraController.onResize(w, h);
     };
-    this._onCameraKey = e => {
+    this.#onCameraKey = e => {
       if (e.key === 'q' || e.key === 'Q') this.cameraController.rotateLeft();
       if (e.key === 'e' || e.key === 'E') this.cameraController.rotateRight();
     };
-    window.addEventListener('resize', this._onResize);
-    window.addEventListener('keydown', this._onCameraKey);
+    window.addEventListener('resize', this.#onResize);
+    window.addEventListener('keydown', this.#onCameraKey);
 
-    this._perf = new PerfOverlay();
-    this._rng  = null; // created in _initMacro from world seed
+    this.#perf = new PerfOverlay();
+    this.#rng  = null; // created in #initMacro from world seed
     this.started = true;
-    this._initMacro();
-    this._initMicro();
-    this._initExploration(worldOpts);
+    this.#initMacro();
+    this.#initMicro();
+    this.#initExploration(worldOpts);
 
     this.dialogueUI = new DialogueUI();
-    this.dialogueUI.onSelect(id => this._onDialogueSelect(id));
+    this.dialogueUI.onSelect(id => this.#onDialogueSelect(id));
 
-    this._macroTimer = setInterval(() => {
-      this.macroGame.advanceDay();
-      this.macroPanel.update(this.macroGame);
-      this._flushMacroLog();
-    }, MACRO_INTERVAL);
-
-    // Start the render loop AFTER all init is complete — avoids RAF competing
-    // with chunk generation on the first few frames (eliminates init jitter).
+    // Render loop starts before setState so the first frame renders immediately.
+    // State transitions to EXPLORATION which starts the macro timer.
     this.rendering.start();
+    this.#setState(GameState.EXPLORATION);
 
     debug('World loaded. WASD move · Q/E rotate camera · Z/C torso · Space toggle turn mode.');
   }
 
-  // ── Macro ──────────────────────────────────────────────────────────────────
+  // ── State machine ────────────────────────────────────────────────────────────
 
-  _initMacro() {
+  #setState(next) {
+    this.#state = next;
+    const macroShouldRun = next === GameState.EXPLORATION;
+    if (macroShouldRun && !this.#macroTimer) {
+      this.#macroTimer = setInterval(() => {
+        this.macroGame.advanceDay();
+        this.macroPanel.update(this.macroGame);
+        this.#flushMacroLog();
+      }, MACRO_INTERVAL);
+    } else if (!macroShouldRun && this.#macroTimer) {
+      clearInterval(this.#macroTimer);
+      this.#macroTimer = null;
+    }
+  }
+
+  // ── Macro ────────────────────────────────────────────────────────────────────
+
+  #initMacro() {
     const factions = [
       new Faction({ id: 'a', name: 'Iron Throne',    leaderId: 'l1' }),
       new Faction({ id: 'b', name: 'Silver Council', leaderId: 'l2' }),
@@ -173,19 +205,14 @@ export class Game {
     debug(`[War]   Each side begins with ${START_MANPOWER} men. Max ${MAX_COMMITMENT}v${MAX_COMMITMENT}.`);
   }
 
-  // ── Exploration ────────────────────────────────────────────────────────────
+  // ── Exploration ──────────────────────────────────────────────────────────────
 
-  _initExploration(opts = {}) {
+  #initExploration(opts = {}) {
     const SEED       = opts.seed      ?? 42;
     const NUM_FAULTS = opts.numFaults ?? 0;
-    // Master gameplay RNG — seeded from world seed so all gameplay randomness
-    // is deterministic from the same seed.  Cosmetic randomness (head-look etc.)
-    // still uses Math.random() and does not affect game state.
-    this._rng = new RNG(SEED ^ 0x47414D45); // "GAME" in hex, distinct from world-gen seed
-    this._chunkOverrides = opts.chunkOverrides ?? new ChunkOverrides();
+    this.#rng = new RNG(SEED ^ 0x47414D45);
+    this.#chunkOverrides = opts.chunkOverrides ?? new ChunkOverrides();
 
-    // Use a pre-built map (from start screen or bitmap loader) if provided,
-    // otherwise generate one fresh so the game can still start without a start screen.
     let macroMap, worldData;
     if (opts.macroMap) {
       macroMap  = opts.macroMap;
@@ -196,10 +223,9 @@ export class Game {
       const pop  = new WorldPopulator();
       worldData  = pop.populate(macroMap, SEED);
     }
-    this._sharedWorld = { seed: SEED, numFaults: NUM_FAULTS, map: macroMap, worldData };
-    window._sharedWorld = this._sharedWorld; // legacy — index.html start screen reads this
+    this.#sharedWorld = { seed: SEED, numFaults: NUM_FAULTS, map: macroMap, worldData };
+    window._sharedWorld = this.#sharedWorld; // legacy — index.html start screen reads this
 
-    // Use provided start position or find nearest passable cell from map centre.
     let startMx = opts.startMx, startMy = opts.startMy;
     if (startMx === undefined || startMy === undefined) {
       const cx = Math.floor(macroMap.width  / 2);
@@ -220,36 +246,29 @@ export class Game {
       }
     }
 
-    // Wire onReady BEFORE init — init fires onReady at the end of _loadAndPlacePlayer.
-    this.microWorld.onReady = () => { if (this._onReady) this._onReady(); };
-    this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this._chunkOverrides);
-    // Snap camera Y to starting elevation so it doesn't lerp from y=0.
+    this.microWorld.onReady = () => { if (this.#onReady) this.#onReady(); };
+    this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this.#chunkOverrides);
     const startPos = this.microWorld.player?.position;
     if (startPos && this.cameraController) {
       this.cameraController.setTarget(startPos.x, startPos.y, startPos.z);
       this.cameraController.snapY();
     }
 
-    // Location HUD — shows macro-cell info beside the macro simulation panel.
-    this._locationPanel = new LocationPanel();
-    this._tilePanel     = new TilePanel();
-    this._compass       = new Compass();
+    this.#locationPanel = new LocationPanel();
+    this.#tilePanel     = new TilePanel();
+    this.#compass       = new Compass();
     const updateLocation = ({ mx, my }) => {
-      const cell = this._sharedWorld?.map.get(mx, my);
-      this._locationPanel.update(cell, this._sharedWorld?.worldData, mx, my);
+      const cell = this.#sharedWorld?.map.get(mx, my);
+      this.#locationPanel.update(cell, this.#sharedWorld?.worldData, mx, my);
     };
     window.addEventListener('playerCellChanged', e => {
-      this._playerCell = e.detail;
+      this.#playerCell = e.detail;
       updateLocation(e.detail);
     });
-    // Apply immediately for the start cell (event already fired before listener registered).
-    // Apply for the start cell (micro_world fires the event before this listener is registered).
-    if (this._playerCell) updateLocation(this._playerCell);
+    if (this.#playerCell) updateLocation(this.#playerCell);
 
-    // Teleport from macro map "Go Here" button
     window.addEventListener('goToCell', e => {
       this.microWorld.teleportTo(e.detail.mx, e.detail.my);
-      // Snap camera Y so it doesn't lerp from the old elevation after a long teleport.
       const p = this.microWorld.player?.position;
       if (p && this.cameraController) {
         this.cameraController.setTarget(p.x, p.y, p.z);
@@ -257,86 +276,67 @@ export class Game {
       }
     });
 
-    // Input + turn mode — extracted to dedicated modules
     const vpEl = document.getElementById('game-viewport');
-
-    // Zoom in for ground-level exploration (default FRUSTUM_HALF is 20)
     this.cameraController.setFrustumHalf(8);
 
-    // Followers
-    this._followerMgr    = new FollowerManager(this._rng);
-    this._followerVis    = new FollowerVisuals(this.scene.scene);
-    this._formationPanel = new FormationPanel(this._charSheet);
+    this.#followerMgr    = new FollowerManager(this.#rng);
+    this.#followerVis    = new FollowerVisuals(this.scene.scene);
+    this.#formationPanel = new FormationPanel(this.#charSheet);
 
-    // Show the PC as slot #1, then the rest of the roster as recruitable companions
-    const playerChar = getCharacter(this._playerCharId);
-    this._formationPanel.setPlayerCharacter(playerChar);
-    const roster = CHARACTERS.filter(c => c.id !== this._playerCharId);
-    this._formationPanel.setRoster(roster);
+    const playerChar = getCharacter(this.#playerCharId);
+    this.#formationPanel.setPlayerCharacter(playerChar);
+    const roster = CHARACTERS.filter(c => c.id !== this.#playerCharId);
+    this.#formationPanel.setRoster(roster);
 
-    this._formationPanel.onRosterChange = activeIds => {
+    this.#formationPanel.onRosterChange = activeIds => {
       const charData = activeIds.map(id => getCharacter(id)).filter(Boolean);
-      this._followerMgr.setActiveFollowers(charData, this.microWorld.player);
+      this.#followerMgr.setActiveFollowers(charData, this.microWorld.player);
     };
-    this._formationPanel.onModeChange = mode => {
-      this._followerMgr.setMode(mode);
+    this.#formationPanel.onModeChange = mode => {
+      this.#followerMgr.setMode(mode);
     };
 
-    // Propagate chunk transitions to follower positions
     this.microWorld.onChunkTransition = (dPx, dPy) => {
-      this._followerMgr.onChunkTransition(dPx, dPy);
+      this.#followerMgr.onChunkTransition(dPx, dPy);
     };
 
-    // Input + turn mode modules
-    this._explorationInput = new ExplorationInput({
+    this.#explorationInput = new ExplorationInput({
       viewport:          vpEl,
       getCamera:         () => this.cameraController.camera,
       getPlayer:         () => this.microWorld.player,
       getCentreRenderer: () => this.microWorld.centreRenderer,
-      getFollowers:      () => this._followerMgr.followers,
+      getFollowers:      () => this.#followerMgr.followers,
       microWorld:        this.microWorld,
-      charSheet:         this._charSheet,
-      formationPanel:    this._formationPanel,
-      onToggleTurn:      () => this._turnMode.toggle(),
-      isTurnActive:      () => this._turnMode?.isActive ?? false,
-      onTurnPass:        () => this._turnMode.pass(),
+      charSheet:         this.#charSheet,
+      formationPanel:    this.#formationPanel,
+      onToggleTurn:      () => this.#turnMode.toggle(),
+      isTurnActive:      () => this.#state === GameState.TURN_MOVE,
+      onTurnPass:        () => this.#turnMode.pass(),
       onLog:             msg => debug(msg),
     });
 
-    this._turnMode = new TurnMode({
+    this.#turnMode = new TurnMode({
       scene:              this.scene.scene,
       viewport:           vpEl,
-      explorationInput:   this._explorationInput,
+      explorationInput:   this.#explorationInput,
       getPlayer:          () => this.microWorld.player,
       getCentreGrid:      () => this.microWorld.centreGrid,
       getCentreRenderer:  () => this.microWorld.centreRenderer,
-      getFollowers:       () => this._followerMgr.followers,
-      followerMgr:        this._followerMgr,
+      getFollowers:       () => this.#followerMgr.followers,
+      followerMgr:        this.#followerMgr,
       microWorld:         this.microWorld,
-      onToggleMacro:      (paused) => {
-        if (paused) {
-          clearInterval(this._macroTimer);
-          this._macroTimer = null;
-        } else {
-          this._macroTimer = setInterval(() => {
-            this.macroGame.advanceDay();
-            this.macroPanel.update(this.macroGame);
-            this._flushMacroLog();
-          }, MACRO_INTERVAL);
-        }
+      onToggleMacro:      paused => {
+        this.#setState(paused ? GameState.TURN_MOVE : GameState.EXPLORATION);
       },
       onLog: msg => debug(msg),
     });
 
-    // Per-frame update — real-time or turn mode
-    const input = this._explorationInput;
-    const tm    = this._turnMode;
+    const input = this.#explorationInput;
     this.rendering.onUpdate = dt => {
-      const perf = this._perf;
+      const perf = this.#perf;
       perf.frameStart();
 
-      // Apply mouse-driven movement (free roam only).
-      if (input.rmouseDown && !tm.isActive) {
+      if (input.rmouseDown && this.#state === GameState.EXPLORATION) {
         const p = this.microWorld.player;
         if (p) {
           const dx   = input.rmouseX - p.px;
@@ -353,28 +353,27 @@ export class Game {
       this.microWorld.update(dt, this.cameraController);
       endWorld?.();
 
-      if (tm.isActive) {
-        tm.update(dt);
+      if (this.#state === GameState.TURN_MOVE) {
+        this.#turnMode.update(dt);
       } else {
-        this._followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
+        this.#followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
       }
 
-      this._followerVis.sync(this._followerMgr.followers, this.microWorld.centreRenderer);
-      this._tilePanel.update(this.microWorld.getTileInfo());
-      this._compass.update(this.cameraController.azimuth);
+      this.#followerVis.sync(this.#followerMgr.followers, this.microWorld.centreRenderer);
+      this.#tilePanel.update(this.microWorld.getTileInfo());
+      this.#compass.update(this.cameraController.azimuth);
 
       perf.frameEnd();
     };
   }
 
-  // ── Micro ──────────────────────────────────────────────────────────────────
+  // ── Micro ────────────────────────────────────────────────────────────────────
 
-  _initMicro() {
+  #initMicro() {
     this.npcManager  = new NPCManager();
     this.microWorld  = new MicroWorld();
     this.dialogueMgr = new DialogueManager();
 
-    // Lord Harven is a leader NPC — same ID as his macro Leader record
     this.npcManager.register(new NPC({
       id: 'l1', name: 'Lord Harven', factionId: 'a', role: 'leader',
     }));
@@ -383,72 +382,69 @@ export class Game {
     }));
   }
 
-  // ── Combat ─────────────────────────────────────────────────────────────────
+  // ── Combat ───────────────────────────────────────────────────────────────────
 
-  _startCombat() {
-    if (!this._combatSession) {
-      this._combatSession = new CombatSession({
+  #startCombat() {
+    this.#setState(GameState.COMBAT);
+    if (!this.#combatSession) {
+      this.#combatSession = new CombatSession({
         macroGame:         this.macroGame,
-        commitments:       this._commitments,
+        commitments:       this.#commitments,
         roster:            ROSTER,
         playerFactionId:   PLAYER_FACTION,
         playerCombatantId: PLAYER_COMBATANT_ID,
         regionId:          COMBAT_REGION,
-        rng:               this._rng,
+        rng:               this.#rng,
         microWorld:        this.microWorld,
         onLog:             msg => debug(msg),
-        onVisualsSync:     cm => this._syncCombatVisuals(cm),
+        onVisualsSync:     cm => this.#syncCombatVisuals(cm),
         onPlayerTurn:      (name, opts, cb) => this.combatHud.showPlayerActions(name, opts, cb),
         onHideActions:     () => this.combatHud.hidePlayerActions(),
-        onEnd:             (winner) => this._onCombatEnd(winner),
+        onEnd:             winner => this.#onCombatEnd(winner),
       });
     }
     this.actorVisuals.reset();
-    this._combatSession.start();
+    this.#combatSession.start();
   }
 
-  _onCombatEnd(winnerFactionId) {
+  #onCombatEnd(winnerFactionId) {
     this.macroPanel.update(this.macroGame);
 
-    // Check war end
     const mpA = this.macroGame.factions.get('a').resources.manpower;
     const mpB = this.macroGame.factions.get('b').resources.manpower;
     if (mpA <= 0 || mpB <= 0) {
-      this._endWar(winnerFactionId);
+      this.#endWar(winnerFactionId);
       return;
     }
 
-    // Show dialogue before next encounter
-    this._startDialogue('l1');
+    this.#startDialogue('l1');
   }
 
-  // ── Dialogue ───────────────────────────────────────────────────────────────
+  // ── Dialogue ─────────────────────────────────────────────────────────────────
 
-  _startDialogue(npcId) {
+  #startDialogue(npcId) {
     const npc = this.npcManager.get(npcId);
-    if (!npc) { this._startCombat(); return; }
+    if (!npc) { this.#startCombat(); return; }
 
-    // Pause macro simulation during dialogue
-    clearInterval(this._macroTimer);
+    this.#setState(GameState.DIALOGUE);
 
     this.dialogueMgr.start(npc, this.macroGame, COMBAT_REGION);
     this.dialogueUI.show(this.dialogueMgr.getState());
   }
 
-  _onDialogueSelect(optionId) {
+  #onDialogueSelect(optionId) {
     const result = this.dialogueMgr.select(optionId);
     if (!result) return;
 
     if (result.consequence) {
       applyConsequence(result.consequence, this.macroGame);
 
-      // Rally immediately increases the player's combat commitment
       if (result.consequence.type === 'leader_rallied') {
         const fid = result.consequence.payload.factionId;
-        if (this._commitments[fid] < MAX_COMMITMENT) {
-          this._commitments[fid]++;
+        if (this.#commitments[fid] < MAX_COMMITMENT) {
+          this.#commitments[fid]++;
           const name = this.macroGame.factions.get(fid).name;
-          debug(`[War] ${name} will commit ${this._commitments[fid]} fighter(s) next encounter.`);
+          debug(`[War] ${name} will commit ${this.#commitments[fid]} fighter(s) next encounter.`);
         }
       }
 
@@ -458,21 +454,16 @@ export class Game {
 
     if (result.ends) {
       this.dialogueUI.hide();
-      // Resume macro simulation
-      this._macroTimer = setInterval(() => {
-        this.macroGame.advanceDay();
-        this.macroPanel.update(this.macroGame);
-        this._flushMacroLog();
-      }, MACRO_INTERVAL);
+      this.#setState(GameState.EXPLORATION);
       debug('[Dialogue] Conversation ended. Next encounter incoming...');
-      setTimeout(() => this._startCombat(), 1500);
+      setTimeout(() => this.#startCombat(), 1500);
     } else {
       this.dialogueUI.show(this.dialogueMgr.getState());
     }
   }
 
-  _endWar(winnerFactionId) {
-    clearInterval(this._macroTimer);
+  #endWar(winnerFactionId) {
+    this.#setState(GameState.WAR_OVER);
     const winner = this.macroGame.factions.get(winnerFactionId);
     const loser  = this.macroGame.factions.get(winnerFactionId === 'a' ? 'b' : 'a');
     debug('');
@@ -482,9 +473,9 @@ export class Game {
     debug('══════════════════════════════════');
   }
 
-  // ── Helpers ────────────────────────────────────────────────────────────────
+  // ── Helpers ──────────────────────────────────────────────────────────────────
 
-  _syncCombatVisuals(cm) {
+  #syncCombatVisuals(cm) {
     if (!cm) return;
     const { combatants, grid, initiative } = cm;
     const active = initiative.current();
@@ -494,9 +485,9 @@ export class Game {
     this.combatHud.update(combatants, initiative.getOrder(), last);
   }
 
-  _flushMacroLog() {
+  #flushMacroLog() {
     const log = this.macroGame.log;
-    while (this._macroLogIdx < log.length) debug(log[this._macroLogIdx++]);
+    while (this.#macroLogIdx < log.length) debug(log[this.#macroLogIdx++]);
   }
 }
 
