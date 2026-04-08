@@ -3,7 +3,16 @@
     "allow": [
       "Bash(ls:*)",
       "Bash(grep -rn \"overrides\\\\|ChunkOverrides\\\\|ChunkEditor\\\\|onEditChunk\\\\|reloadChunk\\\\|chunkOverrides\" C:Usersdmitccrpgjs --include=*.js)",
-      "Bash(find C:Usersdmitccrpg -name *.js -type f)"
+      "Bash(find C:Usersdmitccrpg -name *.js -type f)",
+      "Bash(git add:*)",
+      "Bash(git commit -m ':*)",
+      "Bash(git push:*)",
+      "Bash(gh repo:*)",
+      "Bash(git commit:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)",
+      "Bash(git pull:*)",
+      "Bash(git rm:*)"
     ]
   }
 }

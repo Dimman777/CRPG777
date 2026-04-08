@@ -1,12 +1,14 @@
-// ActionBar — Move / Run buttons shown at the bottom of the screen during
-// the player's turn in turn mode.
+// ActionBar — movement action buttons shown during the player's turn in turn mode.
+//
+// Non-momentum layout:   Move | Crouch | Crawl | Climb | Run ×2 | Sprint ×3
+// Momentum layout:       Run ×2 | Sprint ×3 | Stop
 
 export class ActionBar {
   constructor() {
     const style = document.createElement('style');
     style.textContent = `
       .ab-btn {
-        padding: 9px 26px;
+        padding: 9px 20px;
         font-family: monospace;
         font-size: 13px;
         letter-spacing: 1.5px;
@@ -42,56 +44,78 @@ export class ActionBar {
       left:          '50%',
       transform:     'translateX(-50%)',
       display:       'none',
-      gap:           '12px',
+      gap:           '10px',
       alignItems:    'center',
-      pointerEvents: 'none',   // let clicks pass through the gap
+      pointerEvents: 'none',
       zIndex:        '200',
     });
 
-    this._moveBtn = document.createElement('button');
-    this._runBtn  = document.createElement('button');
-    this._stopBtn = document.createElement('button');
-    this._moveBtn.className   = 'ab-btn';
-    this._runBtn.className    = 'ab-btn';
-    this._stopBtn.className   = 'ab-btn';
-    this._moveBtn.textContent = 'Move';
-    this._runBtn.textContent  = 'Run ×2';
-    this._stopBtn.textContent = 'Stop';
+    const mk = (label) => {
+      const btn = document.createElement('button');
+      btn.className   = 'ab-btn';
+      btn.textContent = label;
+      return btn;
+    };
+
+    this._moveBtn   = mk('Move');
+    this._crouchBtn = mk('Crouch');
+    this._crawlBtn  = mk('Crawl');
+    this._climbBtn  = mk('Climb');
+    this._runBtn    = mk('Run ×2');
+    this._sprintBtn = mk('Sprint ×3');
+    this._stopBtn   = mk('Stop');
+
     this._stopBtn.style.display = 'none'; // hidden until momentum is active
 
-    this.onMove = null; // () => void
-    this.onRun  = null; // () => void
-    this.onStop = null; // () => void
+    // Callbacks — set by TurnMode
+    this.onMove   = null;
+    this.onCrouch = null;
+    this.onCrawl  = null;
+    this.onClimb  = null;
+    this.onRun    = null;
+    this.onSprint = null;
+    this.onStop   = null;
 
-    this._moveBtn.addEventListener('click', () => this.onMove?.());
-    this._runBtn.addEventListener('click',  () => this.onRun?.());
-    this._stopBtn.addEventListener('click', () => this.onStop?.());
+    this._moveBtn.addEventListener(  'click', () => this.onMove?.());
+    this._crouchBtn.addEventListener('click', () => this.onCrouch?.());
+    this._crawlBtn.addEventListener( 'click', () => this.onCrawl?.());
+    this._climbBtn.addEventListener( 'click', () => this.onClimb?.());
+    this._runBtn.addEventListener(   'click', () => this.onRun?.());
+    this._sprintBtn.addEventListener('click', () => this.onSprint?.());
+    this._stopBtn.addEventListener(  'click', () => this.onStop?.());
 
-    this._root.append(this._moveBtn, this._runBtn, this._stopBtn);
+    this._root.append(
+      this._moveBtn, this._crouchBtn, this._crawlBtn, this._climbBtn,
+      this._runBtn, this._sprintBtn, this._stopBtn,
+    );
     document.body.appendChild(this._root);
   }
 
-  // Show or hide the whole bar.
   setVisible(visible) {
     this._root.style.display = visible ? 'flex' : 'none';
   }
 
-  // Visually highlight which action is "active".
-  setActive(mode) { // 'none' | 'move' | 'run' | 'stop'
-    this._moveBtn.classList.toggle('ab-active', mode === 'move');
-    this._runBtn.classList.toggle('ab-active',  mode === 'run');
-    this._stopBtn.classList.toggle('ab-active', mode === 'stop');
+  setActive(mode) {
+    this._moveBtn.classList.toggle(  'ab-active', mode === 'move');
+    this._crouchBtn.classList.toggle('ab-active', mode === 'crouch');
+    this._crawlBtn.classList.toggle( 'ab-active', mode === 'crawl');
+    this._climbBtn.classList.toggle( 'ab-active', mode === 'climb');
+    this._runBtn.classList.toggle(   'ab-active', mode === 'run');
+    this._sprintBtn.classList.toggle('ab-active', mode === 'sprint');
+    this._stopBtn.classList.toggle(  'ab-active', mode === 'stop');
   }
 
-  // Enable or disable the Run button (disabled when no valid run path exists).
-  setRunEnabled(enabled) {
-    this._runBtn.disabled = !enabled;
-  }
+  setRunEnabled(enabled)    { this._runBtn.disabled    = !enabled; }
+  setSprintEnabled(enabled) { this._sprintBtn.disabled = !enabled; }
+  setClimbEnabled(enabled)  { this._climbBtn.disabled  = !enabled; }
 
-  // Switch between normal (Move + Run) and momentum (Run + Stop) layouts.
+  // Switch between normal (Move/Crouch/Crawl/Climb/Run/Sprint) and momentum (Run/Sprint/Stop) layouts.
   setMomentum(hasMomentum) {
-    this._moveBtn.style.display = hasMomentum ? 'none' : '';
-    this._stopBtn.style.display = hasMomentum ? ''     : 'none';
+    this._moveBtn.style.display   = hasMomentum ? 'none' : '';
+    this._crouchBtn.style.display = hasMomentum ? 'none' : '';
+    this._crawlBtn.style.display  = hasMomentum ? 'none' : '';
+    this._climbBtn.style.display  = hasMomentum ? 'none' : '';
+    this._stopBtn.style.display   = hasMomentum ? ''     : 'none';
   }
 
   dispose() { this._root.remove(); }

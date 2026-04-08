@@ -12,7 +12,7 @@ const FH_RADIUS  = 0.20;   // head radius (noticeably smaller)
 const FL_LEG_H   = 0.65;
 const FL_TORSO_H = 0.75;
 const FL_HEAD_H  = 0.40;
-const FOLLOWER_HEIGHT = FL_LEG_H + FL_TORSO_H + FL_HEAD_H; // 1.80
+export const FOLLOWER_HEIGHT = FL_LEG_H + FL_TORSO_H + FL_HEAD_H; // 1.80
 
 // ── Shared "BANTER!" texture ───────────────────────────────────────────────────
 

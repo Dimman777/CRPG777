@@ -171,7 +171,7 @@ export class MicroWorld {
     const az      = cameraController?.azimuth ?? 45;
     const elevFn  = centre?.renderer ? (tx, ty) => centre.renderer.elevationAt(tx, ty) : null;
     const pState  = this._playerState;
-    const dir     = pState.update(dt, centre?.grid, elevFn, az);
+    const dir     = pState.update(dt, centre?.grid, elevFn, az, this.neighborGrids);
 
     if (dir !== 'none') {
       const S = CHUNK_SIZE;
@@ -394,7 +394,8 @@ export class MicroWorld {
 
   // ── Chunk pool ──────────────────────────────────────────────────────────────
 
-  get _centreChunk() { return this._chunks.get(`${this._mx},${this._my}`); }
+  get _centreChunk()  { return this._chunks.get(`${this._mx},${this._my}`); }
+  get neighborGrids() { return this._collectNeighbors(this._mx, this._my); }
 
   // Load missing chunks in the 5×5 window, unload those outside it,
   // then reposition every group so the centre is at world origin.
@@ -487,16 +488,18 @@ export class MicroWorld {
       );
     }
     this._queueRerender(key);
-    // Queue rerenders for neighbors that aren't already visible.
-    // Visible chunks (e.g. centre) don't need repeated sync-rerenders every
-    // time a new neighbor loads — they'll get one final re-render via the
-    // normal gameplay rerender path when the player next crosses a boundary.
+    // Queue rerenders for all neighbours so their seam edges update to match
+    // the newly loaded chunk.  Visible neighbours must also be re-rendered —
+    // without this, a higher chunk rendered before a lower neighbour existed
+    // keeps a flat edge (elevOf fell back to its own elevation) while the
+    // lower chunk blends correctly, leaving a one-sided black gap at the seam.
+    // _queueRerender deduplicates via _rerenderSet so the same key is never
+    // processed more than once per round.
     for (let ddy = -1; ddy <= 1; ddy++)
       for (let ddx = -1; ddx <= 1; ddx++) {
         if (!ddx && !ddy) continue;
         const nbrKey = `${mx+ddx},${my+ddy}`;
-        const nbr = this._chunks.get(nbrKey);
-        if (nbr && !nbr.group.visible) this._queueRerender(nbrKey);
+        if (this._chunks.has(nbrKey)) this._queueRerender(nbrKey);
       }
   }
 

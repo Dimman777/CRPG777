@@ -7,6 +7,9 @@
 /** How often the macro daily tick fires (ms). */
 export const MACRO_INTERVAL = 2000;
 
+/** In-game seconds represented by one complete turn round (player + followers). */
+export const TURN_DURATION_SECONDS = 6;
+
 /** Starting manpower per faction. */
 export const START_MANPOWER = 8;
 
@@ -27,6 +30,12 @@ export const COMBATANT_HP = 20;
 
 /** Base stamina for every combatant. */
 export const COMBATANT_STAMINA = 10;
+
+/** Max Cardio for all entities (0 = fresh, max = gasping). */
+export const STAMINA_MAX_CARDIO  = 60;
+
+/** Max Fatigue for all entities (0 = fresh, max = burned out). */
+export const STAMINA_MAX_FATIGUE = 60;
 
 /** Base damage on a successful melee hit (margin adds on top). */
 export const MELEE_BASE_DAMAGE = 3;

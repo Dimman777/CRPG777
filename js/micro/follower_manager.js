@@ -12,6 +12,9 @@
 
 import { CHUNK_SIZE } from './micro_grid.js';
 import { isPassable } from './tile_utils.js';
+import { StaminaState, MOVEMENT_STATE }            from './stamina_state.js';
+import { STAMINA_MAX_CARDIO, STAMINA_MAX_FATIGUE } from '../data/game_config.js';
+import { getMoveBaseCost, getTerrainCost }         from '../data/movement_costs.js';
 
 export const FORMATION_MODE = Object.freeze({ LOOSE: 'loose', TIGHT: 'tight' });
 
@@ -166,6 +169,13 @@ export class FollowerManager {
       idleCol:        0,
       idleRow:        0,
 
+      // ── Physical exertion (shared model for all characters) ──
+      staminaState:   (() => {
+        const s = new StaminaState(STAMINA_MAX_CARDIO, STAMINA_MAX_FATIGUE);
+        s.setFromStats(char.stats);   // no-op if char has no stats
+        return s;
+      })(),
+
       // ── Transient visual hints (not serialized — rebuilt from state) ──
       showBanter:     false,
       banterTimer:    0,
@@ -312,6 +322,7 @@ export class FollowerManager {
     this._prevPlayerMoving = playerMoving;
 
     for (const f of this._followers) {
+      f.staminaState.recoverRealtime(dt);
       this._tick(dt, f, px, pz, hx, hz, grid, playerMoving);
     }
   }
@@ -572,7 +583,11 @@ export class FollowerManager {
     const dx   = f.targetPx - f.px;
     const dz   = f.targetPy - f.py;
     const dist = Math.hypot(dx, dz);
-    if (dist < 0.04) { f.blockTimer = 0; return; }
+    if (dist < 0.04) {
+      f.blockTimer = 0;
+      f.staminaState?.setMovementState(MOVEMENT_STATE.REST);
+      return;
+    }
 
     // Ease off speed when nearly at target to avoid jitter; scale by caller-supplied multiplier
     const speed = FOLLOWER_SPEED * speedMult * Math.min(1.0, dist / 1.5);
@@ -609,18 +624,31 @@ export class FollowerManager {
       const az = Math.sin(angle + da) * step;
       const nx = f.px + ax;
       const nz = f.py + az;
-      if (isPassable(nx, nz, grid) && !this._overlapsFollower(nx, nz, f, allFollowers)) {
+      if (isPassable(Math.floor(nx), Math.floor(nz), grid) && !this._overlapsFollower(nx, nz, f, allFollowers)) {
         f.px         = nx;
         f.py         = nz;
         f.headingX   = ax / step;
         f.headingZ   = az / step;
         f.legAngle   = Math.atan2(f.headingX, f.headingZ);
         f.blockTimer = 0;
+        if (f.staminaState) {
+          const S = CHUNK_SIZE;
+          const tileX = Math.max(0, Math.min(S - 1, Math.floor(nx)));
+          const tileZ = Math.max(0, Math.min(S - 1, Math.floor(nz)));
+          const base    = getMoveBaseCost('move');
+          const terrain = getTerrainCost(grid?.ground?.[tileZ * S + tileX]);
+          f.staminaState.setMovementState(MOVEMENT_STATE.MOVE);
+          f.staminaState.applyMoveCost(
+            (base.cardio  + terrain.cardio)  * step,
+            (base.fatigue + terrain.fatigue) * step,
+          );
+        }
         return;
       }
     }
 
     // All paths blocked — only push through after being stuck long enough
+    f.staminaState?.setMovementState(MOVEMENT_STATE.REST);
     f.blockTimer += dt;
     if (f.blockTimer >= FollowerManager.BLOCK_TIMEOUT) {
       f.px += (dx / dist) * step;
@@ -674,7 +702,7 @@ export class FollowerManager {
             { x: tx + 1.5, z: tz + 0.5 },
             { x: tx + 0.5, z: tz - 0.5 },
             { x: tx + 0.5, z: tz + 1.5 },
-          ].filter(p => isPassable(p.x, p.z, grid));
+          ].filter(p => isPassable(Math.floor(p.x), Math.floor(p.z), grid));
           if (adj.length === 0) continue;
           adj.sort((a, b) =>
             Math.hypot(a.x - follower.px, a.z - follower.py) -

@@ -78,17 +78,53 @@ export class PlayerView {
       this._spawnAnim = 0;
     }
 
-    const baseY = state.worldY - (LEG_H + TORSO_H + HEAD_H) / 2;
+    const baseY     = state.worldY - (LEG_H + TORSO_H + HEAD_H) / 2;
+    const legAngle  = state.legAngle;
+    const torsoAngle = legAngle + state.torsoOffset;
+    const headAngle  = torsoAngle + state.headOffset;
 
-    this._legMesh.position.set(  state.px, baseY + LEG_H * 0.5,                    state.py);
-    this._torsoMesh.position.set(state.px, baseY + LEG_H + TORSO_H * 0.5,          state.py);
-    this._headMesh.position.set( state.px, baseY + LEG_H + TORSO_H + HEAD_H * 0.5, state.py);
+    const pose = state.poseMode ?? 'stand';
 
-    const torsoAngle = state.legAngle + state.torsoOffset;
-    const headAngle  = torsoAngle     + state.headOffset;
-    this._legMesh.rotation.y   = state.legAngle;
-    this._torsoMesh.rotation.y = torsoAngle;
-    this._headMesh.rotation.y  = headAngle;
+    if (pose === 'crouch') {
+      // Legs vertical, normal position.
+      this._legMesh.position.set(state.px, baseY + LEG_H * 0.5, state.py);
+      this._legMesh.rotation.set(0, legAngle, 0);
+      // Torso tilted 45° forward toward facing direction; center lowered slightly.
+      // rotation.x = -π/4 tilts the top of the cylinder toward +Z (local forward),
+      // then rotation.y aligns forward with the actual leg angle.
+      this._torsoMesh.position.set(state.px, baseY + LEG_H + TORSO_H * 0.38, state.py);
+      this._torsoMesh.rotation.set(-Math.PI / 4, legAngle, 0);
+      // Head stays vertical at its normal height above the legs.
+      this._headMesh.position.set(state.px, baseY + LEG_H + TORSO_H * 0.75 + HEAD_H * 0.5, state.py);
+      this._headMesh.rotation.set(0, headAngle, 0);
+
+    } else if (pose === 'crawl') {
+      // Legs: horizontal, extending backward along the trailing tile.
+      // rotation.x = π/2 aligns the cylinder axis with local +Z; after rotation.y
+      // that becomes the facing direction, so the cylinder lies forward/backward.
+      // Negative rotation.x points the top (positive end) toward -Z (behind player).
+      const sinA = Math.sin(legAngle), cosA = Math.cos(legAngle);
+      const trailX = state.px - sinA * 0.5;  // center the horizontal legs ~0.5 tiles back
+      const trailZ = state.py - cosA * 0.5;
+      this._legMesh.position.set(trailX, baseY + PLAYER_RADIUS, trailZ);
+      this._legMesh.rotation.set(-Math.PI / 2, legAngle, 0);
+      // Torso: at 30° above horizontal (60° from vertical) toward the facing direction.
+      // rotation.x = -π/3 = -60° tilts the top toward +Z by 60°, leaving it 30° above ground.
+      this._torsoMesh.position.set(state.px, baseY + PLAYER_RADIUS * 1.2, state.py);
+      this._torsoMesh.rotation.set(-Math.PI / 3, legAngle, 0);
+      // Head stays vertical at ground level.
+      this._headMesh.position.set(state.px, baseY + HEAD_H * 0.5, state.py);
+      this._headMesh.rotation.set(0, headAngle, 0);
+
+    } else {
+      // Stand — default upright pose.
+      this._legMesh.position.set(  state.px, baseY + LEG_H * 0.5,                    state.py);
+      this._torsoMesh.position.set(state.px, baseY + LEG_H + TORSO_H * 0.5,          state.py);
+      this._headMesh.position.set( state.px, baseY + LEG_H + TORSO_H + HEAD_H * 0.5, state.py);
+      this._legMesh.rotation.set(  0, legAngle,   0);
+      this._torsoMesh.rotation.set(0, torsoAngle, 0);
+      this._headMesh.rotation.set( 0, headAngle,  0);
+    }
   }
 
   dispose() {

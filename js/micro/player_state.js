@@ -2,9 +2,13 @@
 // No Three.js dependency.  Consumed by PlayerView for rendering.
 
 import { CHUNK_SIZE } from './micro_grid.js';
+import { StaminaState, MOVEMENT_STATE }            from './stamina_state.js';
+import { STAMINA_MAX_CARDIO, STAMINA_MAX_FATIGUE } from '../data/game_config.js';
+import { isStepPassable, isStepPassableCrossChunk, getHeightStepCost } from './tile_utils.js';
+import { getMoveBaseCost, getTerrainCost }         from '../data/movement_costs.js';
 
-const PLAYER_SPEED   = 7;      // tiles per second
-const PLAYER_HEIGHT  = 2.0;    // total visual height (legs + torso + head)
+const PLAYER_SPEED          = 7;     // tiles per second
+export const PLAYER_HEIGHT  = 2.0;  // total visual height (legs + torso + head)
 
 export class PlayerState {
   constructor() {
@@ -19,6 +23,12 @@ export class PlayerState {
 
     this._headLookTarget = 0;
     this._headLookTimer  = Math.random() * 3 + 1.5; // cosmetic, non-deterministic OK
+
+    // Physical exertion — shared model for all characters.
+    this.staminaState = new StaminaState(STAMINA_MAX_CARDIO, STAMINA_MAX_FATIGUE);
+
+    // Pose for turn-mode movement visuals.  'stand' | 'crouch' | 'crawl'
+    this.poseMode = 'stand';
 
     // Input state — written externally by InputController or game.js
     this._keys = { w: false, a: false, s: false, d: false };
@@ -75,7 +85,7 @@ export class PlayerState {
   // azimuthDeg — camera azimuth so WASD maps to screen directions.
   // grid — MicroGrid (for passability), may be null.
   // elevationFn — (tx, ty) => worldHeight, may be null.
-  update(dt, grid, elevationFn, azimuthDeg = 45) {
+  update(dt, grid, elevationFn, azimuthDeg = 45, neighborGrids = null) {
     const S  = CHUNK_SIZE;
     const az = azimuthDeg * Math.PI / 180;
     const fwdX = -Math.sin(az), fwdZ = -Math.cos(az);
@@ -106,23 +116,37 @@ export class PlayerState {
     const newX = this.px + dx * step;
     const newZ = this.py + dz * step;
 
-    // Axis-separated collision
+    // Snapshot tile position before movement for height-cost and stamina tracking.
+    const startPx   = this.px, startPz = this.py;
+    const fromTileX = Math.max(0, Math.min(S - 1, Math.floor(this.px)));
+    const fromTileZ = Math.max(0, Math.min(S - 1, Math.floor(this.py)));
+
+    // Axis-separated collision using isStepPassable (respects height cliffs).
     let xMoved = false, zMoved = false;
 
     if (newX < 0 || newX >= S) {
-      this.px = newX; xMoved = true;
+      // Check height at the chunk border before allowing the transition.
+      if (!grid || isStepPassableCrossChunk(fromTileX, fromTileZ, Math.floor(newX), fromTileZ, grid, neighborGrids)) {
+        this.px = newX; xMoved = true;
+      }
     } else {
       const itx = Math.floor(newX);
       const itz = Math.max(0, Math.min(S - 1, Math.floor(this.py)));
-      if (!grid || grid.passable[itz * S + itx]) { this.px = newX; xMoved = true; }
+      if (!grid || isStepPassable(fromTileX, fromTileZ, itx, itz, grid)) { this.px = newX; xMoved = true; }
     }
 
     if (newZ < 0 || newZ >= S) {
-      this.py = newZ; zMoved = true;
+      // Check height at the chunk border before allowing the transition.
+      const curTileX = Math.max(0, Math.min(S - 1, Math.floor(this.px)));
+      if (!grid || isStepPassableCrossChunk(curTileX, fromTileZ, curTileX, Math.floor(newZ), grid, neighborGrids)) {
+        this.py = newZ; zMoved = true;
+      }
     } else {
-      const itx = Math.max(0, Math.min(S - 1, Math.floor(this.px)));
+      // Use the post-X-move tile so the Z step is checked cardinally (same X column),
+      // not as a diagonal from the pre-move origin.
+      const curTileX = Math.max(0, Math.min(S - 1, Math.floor(this.px)));
       const itz = Math.floor(newZ);
-      if (!grid || grid.passable[itz * S + itx]) { this.py = newZ; zMoved = true; }
+      if (!grid || isStepPassable(curTileX, fromTileZ, curTileX, itz, grid)) { this.py = newZ; zMoved = true; }
     }
 
     // Diagonal squeeze
@@ -130,9 +154,34 @@ export class PlayerState {
       const diagX = Math.floor(newX);
       const diagZ = Math.floor(newZ);
       if (diagX >= 0 && diagX < S && diagZ >= 0 && diagZ < S &&
-          (!grid || grid.passable[diagZ * S + diagX])) {
+          isStepPassable(fromTileX, fromTileZ, diagX, diagZ, grid)) {
         this.px = newX;
         this.py = newZ;
+      }
+    }
+
+    // Stamina: drain while moving, gate recovery while still.
+    if (this.staminaState) {
+      const actualDist = Math.hypot(this.px - startPx, this.py - startPz);
+      if (actualDist > 0.0001) {
+        this.staminaState.setMovementState(MOVEMENT_STATE.MOVE);
+        const curTileX = Math.max(0, Math.min(S - 1, Math.floor(this.px)));
+        const curTileZ = Math.max(0, Math.min(S - 1, Math.floor(this.py)));
+        const tileIdx  = curTileZ * S + curTileX;
+        const base     = getMoveBaseCost('move');
+        const terrain  = getTerrainCost(grid?.ground?.[tileIdx]);
+        // Scale per-tile costs by actual distance traveled this frame.
+        this.staminaState.applyMoveCost(
+          (base.cardio  + terrain.cardio)  * actualDist,
+          (base.fatigue + terrain.fatigue) * actualDist,
+        );
+        // One-time height cost when crossing a tile boundary.
+        if (curTileX !== fromTileX || curTileZ !== fromTileZ) {
+          const height = getHeightStepCost(fromTileX, fromTileZ, curTileX, curTileZ, grid);
+          this.staminaState.applyMoveCost(height.cardio, height.fatigue);
+        }
+      } else {
+        this.staminaState.setMovementState(MOVEMENT_STATE.REST);
       }
     }
 

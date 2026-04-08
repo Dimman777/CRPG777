@@ -22,7 +22,10 @@ import { LocationPanel }   from './ui/location_panel.js';
 import { TilePanel }       from './ui/tile_panel.js';
 import { Compass }         from './ui/compass.js';
 import { FollowerManager } from './micro/follower_manager.js';
-import { FollowerVisuals } from './render/follower_visuals.js';
+import { FollowerVisuals, FOLLOWER_HEIGHT } from './render/follower_visuals.js';
+import { StaminaBars }    from './render/stamina_bars.js';
+import { PLAYER_HEIGHT }  from './micro/player_state.js';
+import { StaminaDebug }   from './ui/stamina_debug.js';
 import { FormationPanel }  from './ui/formation_panel.js';
 import { CharacterSheet }  from './ui/character_sheet.js';
 import { ExplorationInput } from './micro/exploration_input.js';
@@ -77,6 +80,8 @@ export class Game {
   #combatSession   = null;
   #followerMgr     = null;
   #followerVis     = null;
+  #staminaBars     = null;
+  #staminaDebug    = null;
   #formationPanel  = null;
   #explorationInput = null;
   #turnMode        = null;
@@ -180,6 +185,7 @@ export class Game {
     }
 
     // 5. Restore followers.
+    this.microWorld.player?.staminaState?.setFromStats(getCharacter(this.#playerCharId)?.stats);
     this.#applyFollowerSnapshot(snapshot.followers, this.microWorld.player);
 
     // 6. Resume.
@@ -234,7 +240,7 @@ export class Game {
       this.macroPanel, this.dialogueUI, this.combatHud,
       this.#locationPanel, this.#tilePanel, this.#compass,
       this.#formationPanel, this.#charSheet, this.#followerVis,
-      this.#perf, this.#saveLoadUI, this.#turnMode,
+      this.#staminaBars, this.#staminaDebug, this.#perf, this.#saveLoadUI, this.#turnMode,
     ].forEach(c => c?.dispose?.());
 
     if (this.scene) { this.scene.dispose(); }
@@ -248,6 +254,7 @@ export class Game {
     this.npcManager = this.microWorld = this.dialogueMgr = null;
     this.#locationPanel = this.#tilePanel = this.#compass = null;
     this.#formationPanel = this.#charSheet = this.#followerVis = null;
+    this.#staminaBars = this.#staminaDebug = null;
     this.#perf = this.#turnMode = this.#explorationInput = null;
     this.#combatSession = this.#followerMgr = null;
     this.started = false;
@@ -271,6 +278,7 @@ export class Game {
     this.#onCameraKey = e => {
       if (e.key === 'q' || e.key === 'Q') this.cameraController.rotateLeft();
       if (e.key === 'e' || e.key === 'E') this.cameraController.rotateRight();
+      if (e.key === '`') this.#staminaDebug?.toggle();
     };
     window.addEventListener('resize', this.#onResize);
     window.addEventListener('keydown', this.#onCameraKey);
@@ -392,6 +400,8 @@ export class Game {
 
     this.microWorld.onReady = () => { if (this.#onReady) this.#onReady(); };
     this.microWorld.init(this.scene.scene, macroMap, SEED, startMx, startMy, this.#chunkOverrides);
+    const playerChar = getCharacter(this.#playerCharId);
+    this.microWorld.player?.staminaState?.setFromStats(playerChar?.stats);
     const startPos = this.microWorld.player?.position;
     if (startPos && this.cameraController) {
       this.cameraController.setTarget(startPos.x, startPos.y, startPos.z);
@@ -425,9 +435,18 @@ export class Game {
 
     this.#followerMgr    = new FollowerManager(this.#rng);
     this.#followerVis    = new FollowerVisuals(this.scene.scene);
+    this.#staminaBars    = new StaminaBars(this.scene.scene);
+    this.#staminaDebug   = new StaminaDebug(() => {
+      const entities = [];
+      const p = this.microWorld.player;
+      if (p?.staminaState) entities.push({ id: 'player', staminaState: p.staminaState });
+      for (const f of this.#followerMgr?.followers ?? []) {
+        if (f.staminaState) entities.push({ id: f.id, staminaState: f.staminaState });
+      }
+      return entities;
+    });
     this.#formationPanel = new FormationPanel(this.#charSheet);
 
-    const playerChar = getCharacter(this.#playerCharId);
     this.#formationPanel.setPlayerCharacter(playerChar);
     const roster = CHARACTERS.filter(c => c.id !== this.#playerCharId);
     this.#formationPanel.setRoster(roster);
@@ -500,12 +519,41 @@ export class Game {
       if (this.#state === GameState.TURN_MOVE) {
         this.#turnMode.update(dt);
       } else {
+        // Realtime exploration: passive stamina recovery for player and followers.
+        this.microWorld.player?.staminaState?.recoverRealtime(dt);
         this.#followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
       }
 
       this.#followerVis.sync(this.#followerMgr.followers, this.microWorld.centreRenderer);
+
+      if (this.#staminaBars) {
+        const cr     = this.microWorld.centreRenderer;
+        const player = this.microWorld.player;
+        const stEntities = [];
+        if (player?.staminaState) {
+          stEntities.push({
+            id:           'player',
+            px:           player.px,
+            py:           player.py,
+            headTopY:     player.worldY + PLAYER_HEIGHT / 2,
+            staminaState: player.staminaState,
+          });
+        }
+        for (const f of this.#followerMgr?.followers ?? []) {
+          stEntities.push({
+            id:           f.id,
+            px:           f.px,
+            py:           f.py,
+            headTopY:     (cr ? cr.elevationAt(f.px, f.py) : 0) + FOLLOWER_HEIGHT,
+            staminaState: f.staminaState,
+          });
+        }
+        this.#staminaBars.sync(stEntities);
+      }
+
       this.#tilePanel.update(this.microWorld.getTileInfo());
       this.#compass.update(this.cameraController.azimuth);
+      this.#staminaDebug?.update();
       this.#saveLoadUI?.update();
 
       perf.frameEnd();
