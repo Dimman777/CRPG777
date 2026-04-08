@@ -100,8 +100,8 @@ export class FollowerVisuals {
   }
 
   // Sync mesh count, positions, rotations, and sprites to the current follower list.
-  // chunkRenderer may be null during the first frame.
-  sync(followers, chunkRenderer) {
+  // f.baseY on each follower must be up-to-date (set by FollowerManager._refreshBaseY).
+  sync(followers) {
     const seen = new Set();
 
     for (const f of followers) {
@@ -109,7 +109,7 @@ export class FollowerVisuals {
       let vis = this._visuals.get(f.id);
       if (!vis) vis = this._create(f);
 
-      const baseY = chunkRenderer ? chunkRenderer.elevationAt(f.px, f.py) : 0;
+      const baseY = f.baseY ?? 0;
 
       // Position each part at its absolute world height
       vis.legMesh.position.set(  f.px, baseY + FL_LEG_H * 0.5,                              f.py);

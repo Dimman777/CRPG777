@@ -7,9 +7,13 @@ import { CHUNK_SIZE } from './micro_grid.js';
 // Elevation constants — must match chunk_renderer.js ELEVATION_SCALE = 10 and
 // chunk_gen.js ELEV_LEVELS = 20 (0.5 m per level in grid.elevation units).
 export const ELEVATION_SCALE = 10;   // world metres per elevation unit
-const STEP_IMPASSABLE_M  = 1.5;  // height diff >= 1.5 m → cliff, impassable
-const STEP_MEDIUM_M      = 1.0;  // height diff >= 1.0 m → costs extra
-const STEP_SMALL_M       = 0.5;  // height diff >= 0.5 m → slight cost
+// Thresholds are set at the MIDPOINT between level boundaries (not at the boundary
+// itself) to avoid Float32Array rounding causing the same N-level height difference
+// to be passable from some tile pairs and impassable from others.
+// 1 level = 0.5 m.  Midpoints: 0→1 = 0.25 m, 1→2 = 0.75 m, 2→3 = 1.25 m.
+export const STEP_IMPASSABLE_M  = 1.25; // height diff > 1.25 m (≥ 3 levels) → cliff, impassable
+const STEP_MEDIUM_M      = 0.75; // height diff > 0.75 m (≥ 2 levels) → costs extra
+const STEP_SMALL_M       = 0.25; // height diff > 0.25 m (≥ 1 level)  → slight cost
 
 /**
  * Returns true if tile (tx, tz) can be stepped on.
@@ -41,8 +45,8 @@ export function getStepHeightDiff(fromTx, fromTz, toTx, toTz, grid) {
  */
 export function getHeightStepCost(fromTx, fromTz, toTx, toTz, grid) {
   const diff = getStepHeightDiff(fromTx, fromTz, toTx, toTz, grid);
-  if (diff >= STEP_MEDIUM_M) return { cardio: 1.0, fatigue: 1.0 }; // 1.0–1.49 m
-  if (diff >= STEP_SMALL_M)  return { cardio: 0.3, fatigue: 0.3 }; // 0.5–0.99 m
+  if (diff >= STEP_MEDIUM_M) return { cardio: 1.0, fatigue: 1.0 }; // ≥ 2 levels (1.0–1.24 m)
+  if (diff >= STEP_SMALL_M)  return { cardio: 0.3, fatigue: 0.3 }; // ≥ 1 level  (0.5–0.99 m)
   return { cardio: 0, fatigue: 0 };
 }
 
@@ -50,7 +54,7 @@ export function getHeightStepCost(fromTx, fromTz, toTx, toTz, grid) {
  * Returns true if the step from (fromTx, fromTz) to (toTx, toTz) is passable,
  * accounting for both obstacle/water passability AND height limits.
  *
- * Cliff rule: a height difference >= 1.5 m (3 elevation levels) is impassable.
+ * Cliff rule: a height difference >= 3 elevation levels (> 1.25 m midpoint) is impassable.
  * Out-of-bounds destinations return true — chunk transition handles them.
  */
 export function isStepPassable(fromTx, fromTz, toTx, toTz, grid) {
@@ -90,11 +94,25 @@ export function isStepPassableCrossChunk(fromTx, fromTz, toTx, toTz, grid, neigh
   if (!nbrGrid) return true; // neighbor not loaded — allow the transition
   // Obstacle / water check in neighbor
   if (!nbrGrid.passable[adjTz * S + adjTx]) return false;
-  // Height check across the border
-  if (!grid) return true;
-  if (fromTx < 0 || fromTx >= S || fromTz < 0 || fromTz >= S) return true;
-  const diff = Math.abs(nbrGrid.elevation[adjTz * S + adjTx] - grid.elevation[fromTz * S + fromTx])
-               * ELEVATION_SCALE;
+  // Height check across the border.
+  // Resolve the from-elevation — fromTx/fromTz may themselves be OOB when this
+  // is called for the second or third step of a run/sprint whose intermediate
+  // tile already crossed into a neighbouring chunk.
+  let fromElev;
+  if (fromTx < 0 || fromTx >= S || fromTz < 0 || fromTz >= S) {
+    let fdx = 0, fdz = 0, fax = fromTx, faz = fromTz;
+    if (fromTx < 0)  { fdx = -1; fax = fromTx + S; }
+    if (fromTx >= S) { fdx =  1; fax = fromTx - S; }
+    if (fromTz < 0)  { fdz = -1; faz = fromTz + S; }
+    if (fromTz >= S) { fdz =  1; faz = fromTz - S; }
+    const fromNbr = neighborGrids?.[`${fdx},${fdz}`];
+    if (!fromNbr) return true; // can't verify height — allow
+    fromElev = fromNbr.elevation[faz * S + fax];
+  } else {
+    if (!grid) return true;
+    fromElev = grid.elevation[fromTz * S + fromTx];
+  }
+  const diff = Math.abs(nbrGrid.elevation[adjTz * S + adjTx] - fromElev) * ELEVATION_SCALE;
   return diff < STEP_IMPASSABLE_M;
 }
 

@@ -310,6 +310,16 @@ export class ChunkRenderer {
          + h11 *      fx  *      fz;
   }
 
+  // Returns the elevation of the tile the character is standing on — no bilinear
+  // blending across neighbours. Use for characters resting on a specific tile to
+  // prevent them floating above cliff-base tiles due to elevation averaging.
+  elevationAtTile(tx, ty) {
+    if (!this._tileElev) return 0;
+    const ix = Math.max(0, Math.min(_S - 1, Math.floor(tx)));
+    const iz = Math.max(0, Math.min(_S - 1, Math.floor(ty)));
+    return this._tileElev[iz * _S + ix];
+  }
+
   dispose() {
     this._disposeObstacles();
     for (const m of [this._floorMesh, this._wallMesh, this._gridMesh]) {

@@ -524,7 +524,26 @@ export class Game {
         this.#followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
       }
 
-      this.#followerVis.sync(this.#followerMgr.followers, this.microWorld.centreRenderer);
+      this.#followerVis.sync(this.#followerMgr.followers);
+      // DEBUG — log every ~60 frames to check follower baseY vs player elevation
+      if (Math.floor(Date.now() / 1000) !== this._dbgLast) {
+        this._dbgLast = Math.floor(Date.now() / 1000);
+        const p = this.microWorld.player;
+        const g = this.microWorld.centreGrid;
+        if (p && g) {
+          const S = 64;
+          const ptx = Math.max(0, Math.min(S-1, Math.floor(p.px)));
+          const ptz = Math.max(0, Math.min(S-1, Math.floor(p.py)));
+          const pElev = g.elevation[ptz * S + ptx];
+          console.log(`[DBG] player tile(${ptx},${ptz}) elev=${pElev.toFixed(3)} worldY=${p.worldY?.toFixed(2)}`);
+          for (const f of this.#followerMgr.followers) {
+            const ftx = Math.max(0, Math.min(S-1, Math.floor(f.px)));
+            const ftz = Math.max(0, Math.min(S-1, Math.floor(f.py)));
+            const fElev = g.elevation[ftz * S + ftx];
+            console.log(`  [DBG] follower ${f.id} tile(${ftx},${ftz}) elev=${fElev.toFixed(3)} f.baseY=${f.baseY?.toFixed(2)} pos=(${f.px.toFixed(1)},${f.py.toFixed(1)})`);
+          }
+        }
+      }
 
       if (this.#staminaBars) {
         const cr     = this.microWorld.centreRenderer;
@@ -544,7 +563,7 @@ export class Game {
             id:           f.id,
             px:           f.px,
             py:           f.py,
-            headTopY:     (cr ? cr.elevationAt(f.px, f.py) : 0) + FOLLOWER_HEIGHT,
+            headTopY:     (f.baseY ?? 0) + FOLLOWER_HEIGHT,
             staminaState: f.staminaState,
           });
         }

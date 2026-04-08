@@ -11,7 +11,7 @@
 // positions stay in sync.
 
 import { CHUNK_SIZE } from './micro_grid.js';
-import { isPassable } from './tile_utils.js';
+import { isPassable, isStepPassable, getHeightStepCost, ELEVATION_SCALE, STEP_IMPASSABLE_M } from './tile_utils.js';
 import { StaminaState, MOVEMENT_STATE }            from './stamina_state.js';
 import { STAMINA_MAX_CARDIO, STAMINA_MAX_FATIGUE } from '../data/game_config.js';
 import { getMoveBaseCost, getTerrainCost }         from '../data/movement_costs.js';
@@ -177,6 +177,7 @@ export class FollowerManager {
       })(),
 
       // ── Transient visual hints (not serialized — rebuilt from state) ──
+      baseY:          0,          // world Y of ground at follower's current tile
       showBanter:     false,
       banterTimer:    0,
       showQuip:       false,
@@ -231,8 +232,9 @@ export class FollowerManager {
     const playerTileX = Math.floor(playerPx);
     const playerTileZ = Math.floor(playerPz);
 
-    const canStep = (tx, tz) =>
-      isPassable(tx, tz, grid) &&
+    // Height-aware passability check — same rules as the player.
+    const canStep = (fromTx, fromTz, tx, tz) =>
+      isStepPassable(fromTx, fromTz, tx, tz, grid) &&
       !(tx === playerTileX && tz === playerTileZ) &&
       !this._overlapsFollower(tx + 0.5, tz + 0.5, f, this._followers);
 
@@ -249,13 +251,44 @@ export class FollowerManager {
       f.headingX = cx / len; f.headingZ = cz / len;
     };
 
+    // Stamina cost for a single tile step — mirrors turn_controller._moveFollower.
+    const chargeWalk = (fromTx, fromTz, toTx, toTz) => {
+      if (!f.staminaState) return;
+      const base    = getMoveBaseCost('move');
+      const terrain = getTerrainCost(grid?.ground?.[toTz * CHUNK_SIZE + toTx]);
+      const height  = getHeightStepCost(fromTx, fromTz, toTx, toTz, grid);
+      f.staminaState.applyMoveCost(
+        base.cardio  + terrain.cardio  + height.cardio,
+        base.fatigue + terrain.fatigue + height.fatigue,
+      );
+      f.staminaState.setMovementState(MOVEMENT_STATE.MOVE);
+    };
+
+    // Stamina cost for a 2-tile run — mirrors playerRunTo in turn_controller.
+    const chargeRun = (fromTx, fromTz, midX, midZ, dstX, dstZ) => {
+      if (!f.staminaState) return;
+      const S    = CHUNK_SIZE;
+      const base = getMoveBaseCost('run');
+      const midT = getTerrainCost(grid?.ground?.[midZ * S + midX]);
+      const dstT = getTerrainCost(grid?.ground?.[dstZ * S + dstX]);
+      const midH = getHeightStepCost(fromTx, fromTz, midX, midZ, grid);
+      const dstH = getHeightStepCost(midX, midZ, dstX, dstZ, grid);
+      f.staminaState.applyMoveCost(
+        base.cardio  + midT.cardio  + dstT.cardio  + midH.cardio  + dstH.cardio,
+        base.fatigue + midT.fatigue + dstT.fatigue + midH.fatigue + dstH.fatigue,
+      );
+      f.staminaState.setMovementState(MOVEMENT_STATE.RUN);
+    };
+
     if (f.ranLastTurn) {
       // Momentum: must run 2 tiles again or stop — no 1-tile walk allowed
       for (const [cx, cz] of candidates) {
         const midX = tileX + cx,     midZ = tileZ + cz;
         const dstX = tileX + cx * 2, dstZ = tileZ + cz * 2;
-        if (!canStep(midX, midZ) || !canStep(dstX, dstZ)) continue;
+        if (!canStep(tileX, tileZ, midX, midZ) || !canStep(midX, midZ, dstX, dstZ)) continue;
         applyMove(f, dstX, dstZ, cx, cz);
+        chargeRun(tileX, tileZ, midX, midZ, dstX, dstZ);
+        this._refreshBaseY(f, grid);
         f.ranLastTurn = true;
         return true;
       }
@@ -268,14 +301,18 @@ export class FollowerManager {
     for (const [cx, cz] of candidates) {
       const midX = tileX + cx,     midZ = tileZ + cz;
       const dstX = tileX + cx * 2, dstZ = tileZ + cz * 2;
-      if (!canStep(midX, midZ) || !canStep(dstX, dstZ)) continue;
+      if (!canStep(tileX, tileZ, midX, midZ) || !canStep(midX, midZ, dstX, dstZ)) continue;
       applyMove(f, dstX, dstZ, cx, cz);
+      chargeRun(tileX, tileZ, midX, midZ, dstX, dstZ);
+      this._refreshBaseY(f, grid);
       f.ranLastTurn = true;
       return true;
     }
     for (const [cx, cz] of candidates) {
-      if (!canStep(tileX + cx, tileZ + cz)) continue;
+      if (!canStep(tileX, tileZ, tileX + cx, tileZ + cz)) continue;
       applyMove(f, tileX + cx, tileZ + cz, cx, cz);
+      chargeWalk(tileX, tileZ, tileX + cx, tileZ + cz);
+      this._refreshBaseY(f, grid);
       f.ranLastTurn = false;
       return true;
     }
@@ -324,6 +361,7 @@ export class FollowerManager {
     for (const f of this._followers) {
       f.staminaState.recoverRealtime(dt);
       this._tick(dt, f, px, pz, hx, hz, grid, playerMoving);
+      this._refreshBaseY(f, grid);
     }
   }
 
@@ -617,6 +655,11 @@ export class FollowerManager {
 
     const angle = Math.atan2(mz, mx);
 
+    // Snapshot tile before the move for height checks and tile-boundary stamina cost.
+    const S         = CHUNK_SIZE;
+    const fromTileX = Math.max(0, Math.min(S - 1, Math.floor(f.px)));
+    const fromTileZ = Math.max(0, Math.min(S - 1, Math.floor(f.py)));
+
     // Try direct path, then 45° and 90° deflections
     const attempts = [0, Math.PI / 4, -Math.PI / 4, Math.PI / 2, -Math.PI / 2];
     for (const da of attempts) {
@@ -624,7 +667,12 @@ export class FollowerManager {
       const az = Math.sin(angle + da) * step;
       const nx = f.px + ax;
       const nz = f.py + az;
-      if (isPassable(Math.floor(nx), Math.floor(nz), grid) && !this._overlapsFollower(nx, nz, f, allFollowers)) {
+      // Use raw (unlamped) floor coords so isStepPassable can handle OOB as a
+      // chunk-border signal (returns true) rather than silently clamping.
+      const toTileX = Math.floor(nx);
+      const toTileZ = Math.floor(nz);
+      if (isStepPassable(fromTileX, fromTileZ, toTileX, toTileZ, grid) &&
+          !this._overlapsFollower(nx, nz, f, allFollowers)) {
         f.px         = nx;
         f.py         = nz;
         f.headingX   = ax / step;
@@ -632,16 +680,20 @@ export class FollowerManager {
         f.legAngle   = Math.atan2(f.headingX, f.headingZ);
         f.blockTimer = 0;
         if (f.staminaState) {
-          const S = CHUNK_SIZE;
-          const tileX = Math.max(0, Math.min(S - 1, Math.floor(nx)));
-          const tileZ = Math.max(0, Math.min(S - 1, Math.floor(nz)));
+          const clampedTileX = Math.max(0, Math.min(S - 1, toTileX));
+          const clampedTileZ = Math.max(0, Math.min(S - 1, toTileZ));
           const base    = getMoveBaseCost('move');
-          const terrain = getTerrainCost(grid?.ground?.[tileZ * S + tileX]);
+          const terrain = getTerrainCost(grid?.ground?.[clampedTileZ * S + clampedTileX]);
           f.staminaState.setMovementState(MOVEMENT_STATE.MOVE);
           f.staminaState.applyMoveCost(
             (base.cardio  + terrain.cardio)  * step,
             (base.fatigue + terrain.fatigue) * step,
           );
+          // One-time height cost when crossing a tile boundary — same as player_state.js
+          if (clampedTileX !== fromTileX || clampedTileZ !== fromTileZ) {
+            const height = getHeightStepCost(fromTileX, fromTileZ, clampedTileX, clampedTileZ, grid);
+            f.staminaState.applyMoveCost(height.cardio, height.fatigue);
+          }
         }
         return;
       }
@@ -667,6 +719,34 @@ export class FollowerManager {
   }
 
   // ── Formation geometry ──────────────────────────────────────────────────────
+
+  // Refresh f.baseY from the grid's raw elevation data using cliff-aware bilinear
+  // interpolation.  Bilinear blending approximates the rendered terrain surface on
+  // gentle slopes (same as the player).  Cliff guard: corners whose height differs
+  // from the follower's own tile by >= STEP_IMPASSABLE_M are clamped to the own-tile
+  // elevation so we never blend across an impassable cliff face.
+  // Uses grid.elevation directly (not chunkRenderer._tileElev) so it stays valid
+  // even when the renderer is mid-render with _tileElev == null.
+  _refreshBaseY(f, grid) {
+    if (!grid) return;
+    const S = CHUNK_SIZE;
+    const x = Math.max(0, Math.min(S - 0.0001, f.px));
+    const z = Math.max(0, Math.min(S - 0.0001, f.py));
+    const x0 = Math.floor(x), x1 = Math.min(S - 1, x0 + 1);
+    const z0 = Math.floor(z), z1 = Math.min(S - 1, z0 + 1);
+    const fx = x - x0, fz = z - z0;
+    const e00 = grid.elevation[z0 * S + x0]; // follower's own tile
+    // Cliff in raw-elevation units (STEP_IMPASSABLE_M is in world-metres)
+    const CLIFF_RAW = STEP_IMPASSABLE_M / ELEVATION_SCALE;
+    const guard = (e) => (Math.abs(e - e00) >= CLIFF_RAW ? e00 : e);
+    const e10 = guard(grid.elevation[z0 * S + x1]);
+    const e01 = guard(grid.elevation[z1 * S + x0]);
+    const e11 = guard(grid.elevation[z1 * S + x1]);
+    f.baseY = (e00 * (1 - fx) * (1 - fz)
+             + e10 *      fx  * (1 - fz)
+             + e01 * (1 - fx) *      fz
+             + e11 *      fx  *      fz) * ELEVATION_SCALE;
+  }
 
   _slotPos(px, pz, hx, hz, slotIdx, scale = 1.0, colRowOverride = null) {
     // Normalise heading (default to facing south if no movement yet)
