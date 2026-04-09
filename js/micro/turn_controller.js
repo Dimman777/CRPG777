@@ -494,7 +494,7 @@ export class TurnController {
 
   // Call once per frame while turn mode is active.
   // Advances follower turns with a timed delay between each one.
-  tick(dt, followers, player, grid, chunkRenderer) {
+  tick(dt, followers, player, grid, chunkRenderer, neighborGrids = null) {
     if (this._state !== TURN_STATE.FOLLOWERS) return;
 
     this._stepTimer -= dt;
@@ -507,7 +507,7 @@ export class TurnController {
 
     let moved;
     if (this.onFollowerTurn) {
-      moved = this.onFollowerTurn(this._followerIdx, player, grid);
+      moved = this.onFollowerTurn(this._followerIdx, player, grid, neighborGrids);
     } else {
       moved = this._moveFollower(followers[this._followerIdx], player, grid, followers);
     }

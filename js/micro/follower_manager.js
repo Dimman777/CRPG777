@@ -210,7 +210,7 @@ export class FollowerManager {
   // Called by TurnController when it's this follower's turn to act.
   // Moves them exactly one tile toward their formation slot, respecting
   // tight / loose scale and tile passability.  No-op if already on the target tile.
-  advanceOneTurnStep(followerIdx, playerPx, playerPz, hx, hz, grid) {
+  advanceOneTurnStep(followerIdx, playerPx, playerPz, hx, hz, grid, neighborGrids = null) {
     const f = this._followers[followerIdx];
     if (!f) return;
 
@@ -288,7 +288,7 @@ export class FollowerManager {
         if (!canStep(tileX, tileZ, midX, midZ) || !canStep(midX, midZ, dstX, dstZ)) continue;
         applyMove(f, dstX, dstZ, cx, cz);
         chargeRun(tileX, tileZ, midX, midZ, dstX, dstZ);
-        this._refreshBaseY(f, grid);
+        this._refreshBaseY(f, grid, neighborGrids);
         f.ranLastTurn = true;
         return true;
       }
@@ -304,7 +304,7 @@ export class FollowerManager {
       if (!canStep(tileX, tileZ, midX, midZ) || !canStep(midX, midZ, dstX, dstZ)) continue;
       applyMove(f, dstX, dstZ, cx, cz);
       chargeRun(tileX, tileZ, midX, midZ, dstX, dstZ);
-      this._refreshBaseY(f, grid);
+      this._refreshBaseY(f, grid, neighborGrids);
       f.ranLastTurn = true;
       return true;
     }
@@ -312,7 +312,7 @@ export class FollowerManager {
       if (!canStep(tileX, tileZ, tileX + cx, tileZ + cz)) continue;
       applyMove(f, tileX + cx, tileZ + cz, cx, cz);
       chargeWalk(tileX, tileZ, tileX + cx, tileZ + cz);
-      this._refreshBaseY(f, grid);
+      this._refreshBaseY(f, grid, neighborGrids);
       f.ranLastTurn = false;
       return true;
     }

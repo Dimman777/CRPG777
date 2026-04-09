@@ -75,8 +75,11 @@ export class TurnMode {
         const prevAction = this._roundAction;
         this._roundAction = 'rest'; // reset for incoming round
         o.getPlayer()?.staminaState?.recoverRealtime(TURN_DURATION_SECONDS, prevAction);
-        // Followers always walk — recover with 'move' conditions.
-        for (const f of o.getFollowers()) f.staminaState?.recoverRealtime(TURN_DURATION_SECONDS, 'move');
+        // Followers recover based on whether they ran last turn.
+        // Runners get no recovery (matches realtime behaviour); walkers recover normally.
+        for (const f of o.getFollowers()) {
+          f.staminaState?.recoverRealtime(TURN_DURATION_SECONDS, f.ranLastTurn ? 'run' : 'move');
+        }
       }
       if (isPlayerTurn) {
         this._actionMode        = 'none';
@@ -108,12 +111,13 @@ export class TurnMode {
     };
 
     // Delegate follower movement
-    this._tc.onFollowerTurn = (idx, player, grid) => {
+    this._tc.onFollowerTurn = (idx, player, grid, neighborGrids) => {
       return opts.followerMgr.advanceOneTurnStep(
         idx,
         player.px, player.py,
         player.headingX, player.headingZ,
         grid,
+        neighborGrids,
       );
     };
 
@@ -176,6 +180,7 @@ export class TurnMode {
           o.getPlayer(),
           o.getCentreGrid(),
           o.getCentreRenderer(),
+          o.microWorld.neighborGrids,
         );
       }
     }
@@ -552,13 +557,28 @@ export class TurnMode {
            this._actionMode === 'crouch' ||
            this._actionMode === 'crawl') && !tc.playerRanLastTurn) {
         const player = o.getPlayer();
-        const diffX  = hit.tx - Math.floor(player.px);
-        const diffZ  = hit.tz - Math.floor(player.py);
-        if (diffX === 0 && diffZ === 0) return;
-        if (Math.abs(diffX) > 1 || Math.abs(diffZ) > 1) {
+        // Snap to nearest visible move highlight — flat-plane raycasting at player
+        // elevation gives inaccurate XZ when adjacent tiles differ in height, so
+        // we find the highlight mesh whose center is closest to the click point.
+        const worldPos = input.worldPosFromEvent(e);
+        if (!worldPos) return;
+        const ptx = Math.floor(player.px), ptz = Math.floor(player.py);
+        let diffX = null, diffZ = null;
+        let bestDist = 1.5; // snap radius in tile-units
+        for (const mesh of this._moveDsts) {
+          if (!mesh.visible) continue;
+          const d = Math.hypot(worldPos.x - mesh.position.x, worldPos.z - mesh.position.z);
+          if (d < bestDist) {
+            bestDist = d;
+            diffX = Math.floor(mesh.position.x) - ptx;
+            diffZ = Math.floor(mesh.position.z) - ptz;
+          }
+        }
+        if (diffX === null) {
           log('[Turn] Click an adjacent tile to move.');
           return;
         }
+        if (diffX === 0 && diffZ === 0) return;
         const savedAngle = player.legAngle;
         const savedHX    = player.headingX;
         const savedHZ    = player.headingZ;
