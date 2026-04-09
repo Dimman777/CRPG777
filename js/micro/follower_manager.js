@@ -321,7 +321,7 @@ export class FollowerManager {
   }
 
   // Call every frame.  grid may be null during initial load.
-  update(dt, player, grid) {
+  update(dt, player, grid, neighborGrids = null) {
     if (!player || this._followers.length === 0) { this._lastPx = player?.px ?? null; this._lastPz = player?.py ?? null; return; }
     const px = player.px, pz = player.py;
     const hx = player.headingX, hz = player.headingZ;
@@ -361,7 +361,7 @@ export class FollowerManager {
     for (const f of this._followers) {
       f.staminaState.recoverRealtime(dt);
       this._tick(dt, f, px, pz, hx, hz, grid, playerMoving);
-      this._refreshBaseY(f, grid);
+      this._refreshBaseY(f, grid, neighborGrids);
     }
   }
 
@@ -720,28 +720,42 @@ export class FollowerManager {
 
   // ── Formation geometry ──────────────────────────────────────────────────────
 
-  // Refresh f.baseY from the grid's raw elevation data using cliff-aware bilinear
-  // interpolation.  Bilinear blending approximates the rendered terrain surface on
-  // gentle slopes (same as the player).  Cliff guard: corners whose height differs
-  // from the follower's own tile by >= STEP_IMPASSABLE_M are clamped to the own-tile
-  // elevation so we never blend across an impassable cliff face.
-  // Uses grid.elevation directly (not chunkRenderer._tileElev) so it stays valid
-  // even when the renderer is mid-render with _tileElev == null.
-  _refreshBaseY(f, grid) {
+  // Refresh f.baseY from raw elevation data using cliff-aware bilinear interpolation.
+  // Handles followers that have drifted outside the centre chunk (e.g. when the player
+  // is near a chunk edge and slots extend into a neighbouring chunk) by reading from
+  // the appropriate neighbour grid instead of clamping to the chunk border.
+  _refreshBaseY(f, grid, neighborGrids = null) {
     if (!grid) return;
     const S = CHUNK_SIZE;
-    const x = Math.max(0, Math.min(S - 0.0001, f.px));
-    const z = Math.max(0, Math.min(S - 0.0001, f.py));
-    const x0 = Math.floor(x), x1 = Math.min(S - 1, x0 + 1);
-    const z0 = Math.floor(z), z1 = Math.min(S - 1, z0 + 1);
-    const fx = x - x0, fz = z - z0;
-    const e00 = grid.elevation[z0 * S + x0]; // follower's own tile
-    // Cliff in raw-elevation units (STEP_IMPASSABLE_M is in world-metres)
     const CLIFF_RAW = STEP_IMPASSABLE_M / ELEVATION_SCALE;
+
+    // Resolve the elevation at an arbitrary (tx, tz) which may be outside [0, S).
+    const elevAt = (tx, tz) => {
+      let g = grid, lx = tx, lz = tz;
+      if (tx < 0 || tx >= S || tz < 0 || tz >= S) {
+        let dx = 0, dz = 0;
+        if (tx < 0)  { dx = -1; lx = tx + S; }
+        if (tx >= S) { dx =  1; lx = tx - S; }
+        if (tz < 0)  { dz = -1; lz = tz + S; }
+        if (tz >= S) { dz =  1; lz = tz - S; }
+        g = neighborGrids?.[`${dx},${dz}`];
+        if (!g) return grid.elevation[Math.max(0, Math.min(S-1, tz)) * S + Math.max(0, Math.min(S-1, tx))];
+      }
+      return g.elevation[lz * S + lx];
+    };
+
+    // Bilinear corners — use raw (unlamped) tile indices so OOB resolves correctly.
+    const x  = f.px, z  = f.py;
+    const x0 = Math.floor(x), x1 = x0 + 1;
+    const z0 = Math.floor(z), z1 = z0 + 1;
+    const fx = x - x0, fz = z - z0;
+
+    const e00 = elevAt(x0, z0); // follower's own tile
     const guard = (e) => (Math.abs(e - e00) >= CLIFF_RAW ? e00 : e);
-    const e10 = guard(grid.elevation[z0 * S + x1]);
-    const e01 = guard(grid.elevation[z1 * S + x0]);
-    const e11 = guard(grid.elevation[z1 * S + x1]);
+    const e10 = guard(elevAt(x1, z0));
+    const e01 = guard(elevAt(x0, z1));
+    const e11 = guard(elevAt(x1, z1));
+
     f.baseY = (e00 * (1 - fx) * (1 - fz)
              + e10 *      fx  * (1 - fz)
              + e01 * (1 - fx) *      fz

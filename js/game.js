@@ -521,7 +521,7 @@ export class Game {
       } else {
         // Realtime exploration: passive stamina recovery for player and followers.
         this.microWorld.player?.staminaState?.recoverRealtime(dt);
-        this.#followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid);
+        this.#followerMgr.update(dt, this.microWorld.player, this.microWorld.centreGrid, this.microWorld.neighborGrids);
       }
 
       this.#followerVis.sync(this.#followerMgr.followers);
