@@ -222,7 +222,10 @@ export class FollowerManager {
     const targetTileX = Math.floor(slotX);
     const targetTileZ = Math.floor(slotZ);
 
-    if (tileX === targetTileX && tileZ === targetTileZ) return false; // already at slot
+    if (tileX === targetTileX && tileZ === targetTileZ) {
+      f.ranLastTurn = false; // standing still — allow full stamina recovery
+      return false;
+    }
 
     const rawDx = targetTileX - tileX;
     const rawDz = targetTileZ - tileZ;
